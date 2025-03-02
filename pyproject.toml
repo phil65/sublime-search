@@ -12,6 +12,14 @@ classifiers = [
 ]
 dynamic = ["version"]
 
+[project.urls]
+Documentation = "https://phil65.github.io/sublime-search/"
+Source = "https://github.com/phil65/sublime-search"
+Issues = "https://github.com/phil65/sublime-search/issues"
+Discussions = "https://github.com/phil65/sublime-search/discussions"
+"Code coverage" = "https://app.codecov.io/gh/phil65/sublime-search"
+
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
