@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # Import the Rust-compiled extension
 from ._sublime_search import fuzzy_match as _fuzzy_match
+from ._sublime_search import fuzzy_match_simple as _fuzzy_match_simple
 from ._sublime_search import get_best_matches as _get_best_matches
 
 
@@ -55,5 +56,19 @@ def get_best_matches(search_string: str, candidates: list[str]) -> list[tuple[st
     return _get_best_matches(search_string, candidates)
 
 
+def fuzzy_match_simple(pattern: str, instring: str, case_sensitive: bool = False) -> bool:
+    """Return True if each character in pattern is found in order in instring.
+
+    Args:
+        pattern: the pattern to be matched
+        instring: the containing string to search against
+        case_sensitive: whether to match case-sensitively
+
+    Returns:
+        True if there is a match, False otherwise
+    """
+    return _fuzzy_match_simple(pattern, instring, case_sensitive)
+
+
 # Make these the public API
-__all__ = ["fuzzy_match", "get_best_matches"]
+__all__ = ["fuzzy_match", "get_best_matches", "fuzzy_match_simple"]

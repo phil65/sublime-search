@@ -144,9 +144,45 @@ fn get_best_matches(search_string: &str, candidates: Vec<String>) -> PyResult<Ve
     Ok(results)
 }
 
+#[pyfunction]
+fn fuzzy_match_simple(pattern: &str, instring: &str, case_sensitive: bool) -> bool {
+    // Handle empty pattern explicitly (matches everything)
+    if pattern.is_empty() {
+        return true;
+    }
+
+    // Handle empty instring (can't match anything)
+    if instring.is_empty() {
+        return false;
+    }
+
+    let (pattern, instring) = if case_sensitive {
+        (pattern.to_string(), instring.to_string())
+    } else {
+        (pattern.to_lowercase(), instring.to_lowercase())
+    };
+
+    let mut p_idx = 0;
+    let mut s_idx = 0;
+    let p_chars: Vec<char> = pattern.chars().collect();
+    let s_chars: Vec<char> = instring.chars().collect();
+    let p_len = p_chars.len();
+    let s_len = s_chars.len();
+
+    while p_idx < p_len && s_idx < s_len {
+        if p_chars[p_idx] == s_chars[s_idx] {
+            p_idx += 1;
+        }
+        s_idx += 1;
+    }
+
+    p_idx == p_len
+}
+
 #[pymodule]
 fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fuzzy_match, m)?)?;
     m.add_function(wrap_pyfunction!(get_best_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzzy_match_simple, m)?)?;
     Ok(())
 }
