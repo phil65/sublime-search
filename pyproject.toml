@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fuzzy_match_rs"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "fuzzy_match_rs._fuzzy_match_rs"
+
+[dependency-groups]
+dev = ["pytest", "pytest-cov"]
+
+docs = [
+    "mkdocs-mknodes",
+    "mkdocs-material",
+    # Only add below (Copier)
+]
