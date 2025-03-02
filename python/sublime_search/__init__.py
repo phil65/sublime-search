@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from importlib.metadata import version
+
 # Import the Rust-compiled extension
 from ._sublime_search import fuzzy_match as _fuzzy_match
 from ._sublime_search import fuzzy_match_simple as _fuzzy_match_simple
 from ._sublime_search import get_best_matches as _get_best_matches
+
+__version__ = version("sublime-search")
 
 
 def fuzzy_match(
