@@ -3,7 +3,7 @@ requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "sublime_search"
+name = "sublime-search"
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Rust",
