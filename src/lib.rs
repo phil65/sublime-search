@@ -13,6 +13,11 @@ fn fuzzy_match(
     max_lead_penalty: i32,
     unmatched_penalty: i32,
 ) -> (bool, i32) {
+    // Handle empty pattern explicitly
+    if pattern.is_empty() {
+        return (false, 0);
+    }
+
     let mut score = 0;
     let mut p_idx = 0;
     let p_len = pattern.chars().count();
@@ -37,9 +42,12 @@ fn fuzzy_match(
             None
         };
 
-        let p_lower = p_char.map(|c| c.to_lowercase().next().unwrap());
-        let s_lower = s_char.to_lowercase().next().unwrap();
-        let s_upper = s_char.to_uppercase().next().unwrap();
+        // Improve Unicode handling with better lowercase/uppercase conversion
+        let p_lower = p_char.map(|c| c.to_lowercase().next().unwrap_or(c));
+
+        let s_lower = s_char.to_lowercase().next().unwrap_or(s_char);
+
+        let s_upper = s_char.to_uppercase().next().unwrap_or(s_char);
 
         let next_match = p_char.is_some() && p_lower == Some(s_lower);
         let rematch = best_letter.is_some() && best_lower == Some(s_lower);
@@ -116,6 +124,11 @@ fn fuzzy_match(
 
 #[pyfunction]
 fn get_best_matches(search_string: &str, candidates: Vec<String>) -> PyResult<Vec<(String, i32)>> {
+    // Special case for empty search string
+    if search_string.is_empty() {
+        return Ok(Vec::new()); // Return empty results for empty search string
+    }
+
     let mut results = Vec::new();
 
     for candidate in candidates {
