@@ -24,7 +24,8 @@ fn fuzzy_match(
 
     let mut prev_match = false;
     let mut prev_lower = false;
-    let mut prev_sep = true; // so that matching first letter gets sep_bonus
+    // matching first letter gets sep_bonus
+    let mut prev_sep = true;
 
     let mut best_letter = None;
     let mut best_lower = None;
@@ -143,9 +144,8 @@ fn get_best_matches(search_string: &str, candidates: Vec<String>) -> PyResult<Ve
     Ok(results)
 }
 
-/// A Python module implemented in Rust
 #[pymodule]
-fn _fuzzy_match_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fuzzy_match, m)?)?;
     m.add_function(wrap_pyfunction!(get_best_matches, m)?)?;
     Ok(())

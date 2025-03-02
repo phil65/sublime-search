@@ -1,25 +1,25 @@
-# fuzzy_match_rs
+# sublime-search
 
-A fast, Rust implementation of sublime-text style fuzzy matching for Python.
+A simple, fast, Rust implementation of sublime-text style fuzzy matching for Python.
 
 ## Installation
 
 ```bash
-pip install fuzzy_match_rs
-uv add fuzzy_match_rs
+pip install sublime-search
+uv add sublime-search
 ```
 
 ## Usage
 
 ```python
-import fuzzy_match_rs
+import sublime_search
 
 # Check if a pattern matches a string with a score
-is_match, score = fuzzy_match_rs.fuzzy_match("abc", "abcdef")
+is_match, score = sublime_search.fuzzy_match("abc", "abcdef")
 print(f"Match: {is_match}, Score: {score}")
 
 # Find best matching strings from a list of candidates
-results = fuzzy_match_rs.get_best_matches("abc", ["abcdef", "xabc", "testing"])
+results = sublime_search.get_best_matches("abc", ["abcdef", "xabc", "testing"])
 for candidate, score in results:
     print(f"{candidate}: {score}")
 ```

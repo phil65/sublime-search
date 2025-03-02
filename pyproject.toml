@@ -3,7 +3,7 @@ requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fuzzy_match_rs"
+name = "sublime_search"
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Rust",
@@ -15,7 +15,7 @@ dynamic = ["version"]
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
-module-name = "fuzzy_match_rs._fuzzy_match_rs"
+module-name = "sublime_search._sublime_search"
 
 [dependency-groups]
 dev = ["pytest", "pytest-cov"]

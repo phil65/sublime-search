@@ -1,8 +1,8 @@
-from typing import List, Tuple
+from __future__ import annotations
 
 # Import the Rust-compiled extension
-from ._fuzzy_match_rs import fuzzy_match as _fuzzy_match
-from ._fuzzy_match_rs import get_best_matches as _get_best_matches
+from ._sublime_search import fuzzy_match as _fuzzy_match
+from ._sublime_search import get_best_matches as _get_best_matches
 
 
 def fuzzy_match(
