@@ -1,5 +1,9 @@
 use pyo3::prelude::*;
 use std::cmp::max;
+use std::ops::Range;
+
+mod streaming_matcher;
+use streaming_matcher::StreamingFuzzyMatcher;
 
 #[pyfunction]
 #[pyo3(signature = (pattern, instring, adj_bonus=5, sep_bonus=10, camel_bonus=10, lead_penalty=-3, max_lead_penalty=-9, unmatched_penalty=-1))]
@@ -179,10 +183,132 @@ fn fuzzy_match_simple(pattern: &str, instring: &str, case_sensitive: bool) -> bo
     p_idx == p_len
 }
 
+/// Python wrapper for a match range.
+#[pyclass]
+#[derive(Clone)]
+struct MatchRange {
+    #[pyo3(get)]
+    start: usize,
+    #[pyo3(get)]
+    end: usize,
+}
+
+#[pymethods]
+impl MatchRange {
+    fn __repr__(&self) -> String {
+        format!("MatchRange(start={}, end={})", self.start, self.end)
+    }
+
+    fn __eq__(&self, other: &MatchRange) -> bool {
+        self.start == other.start && self.end == other.end
+    }
+}
+
+impl From<Range<usize>> for MatchRange {
+    fn from(range: Range<usize>) -> Self {
+        MatchRange {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+/// A streaming fuzzy matcher that processes text chunks incrementally.
+///
+/// This matcher is designed for real-time matching scenarios like code editing
+/// where text arrives in chunks (e.g., from an LLM streaming response).
+///
+/// Example:
+///     >>> matcher = StreamingFuzzyMatcher("function foo() {\n    return 42;\n}")
+///     >>> result = matcher.push("function foo() {\n", None)
+///     >>> print(result)  # MatchRange with the match location
+#[pyclass(name = "StreamingFuzzyMatcher")]
+struct PyStreamingFuzzyMatcher {
+    inner: StreamingFuzzyMatcher,
+}
+
+#[pymethods]
+impl PyStreamingFuzzyMatcher {
+    /// Create a new streaming fuzzy matcher for the given source text.
+    ///
+    /// Args:
+    ///     source_text: The text to search within
+    #[new]
+    fn new(source_text: &str) -> Self {
+        PyStreamingFuzzyMatcher {
+            inner: StreamingFuzzyMatcher::new(source_text),
+        }
+    }
+
+    /// Push a new chunk of text and get the best match found so far.
+    ///
+    /// This method accumulates text chunks and processes complete lines.
+    /// Partial lines are buffered internally until a newline is received.
+    ///
+    /// Args:
+    ///     chunk: Text chunk to add to the query
+    ///     line_hint: Optional line number hint for match selection
+    ///
+    /// Returns:
+    ///     MatchRange if a match has been found, None otherwise
+    #[pyo3(signature = (chunk, line_hint=None))]
+    fn push(&mut self, chunk: &str, line_hint: Option<u32>) -> Option<MatchRange> {
+        self.inner.push(chunk, line_hint).map(MatchRange::from)
+    }
+
+    /// Finish processing and return all final matches.
+    ///
+    /// This processes any remaining incomplete line before returning
+    /// the final match results.
+    ///
+    /// Returns:
+    ///     List of all found MatchRange objects
+    fn finish(&mut self) -> Vec<MatchRange> {
+        self.inner
+            .finish()
+            .into_iter()
+            .map(MatchRange::from)
+            .collect()
+    }
+
+    /// Return the best match considering line hints.
+    ///
+    /// Returns:
+    ///     Best MatchRange, or None if no suitable match found
+    fn select_best_match(&self) -> Option<MatchRange> {
+        self.inner.select_best_match().map(MatchRange::from)
+    }
+
+    /// Get the text for a given range from the source.
+    ///
+    /// Args:
+    ///     match_range: The MatchRange to extract text for
+    ///
+    /// Returns:
+    ///     The matched text as a string
+    fn get_text(&self, match_range: &MatchRange) -> String {
+        self.inner.get_text(&(match_range.start..match_range.end))
+    }
+
+    /// Returns the accumulated query lines.
+    #[getter]
+    fn query_lines(&self) -> Vec<String> {
+        self.inner.query_lines().to_vec()
+    }
+
+    /// Returns the source lines.
+    #[getter]
+    fn source_lines(&self) -> Vec<String> {
+        self.inner.source_lines().to_vec()
+    }
+}
+
 #[pymodule]
 fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fuzzy_match, m)?)?;
     m.add_function(wrap_pyfunction!(get_best_matches, m)?)?;
     m.add_function(wrap_pyfunction!(fuzzy_match_simple, m)?)?;
+    m.add_class::<PyStreamingFuzzyMatcher>()?;
+    m.add_class::<MatchRange>()?;
     Ok(())
 }

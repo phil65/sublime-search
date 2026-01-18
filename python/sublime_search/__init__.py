@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from importlib.metadata import version
 
+from ._sublime_search import MatchRange, StreamingFuzzyMatcher
+
 # Import the Rust-compiled extension
 from ._sublime_search import fuzzy_match as _fuzzy_match
 from ._sublime_search import fuzzy_match_simple as _fuzzy_match_simple
@@ -47,7 +49,9 @@ def fuzzy_match(
     )
 
 
-def get_best_matches(search_string: str, candidates: list[str]) -> list[tuple[str, int]]:
+def get_best_matches(
+    search_string: str, candidates: list[str]
+) -> list[tuple[str, int]]:
     """Return sorted list of all matches.
 
     Args:
@@ -60,7 +64,9 @@ def get_best_matches(search_string: str, candidates: list[str]) -> list[tuple[st
     return _get_best_matches(search_string, candidates)
 
 
-def fuzzy_match_simple(pattern: str, instring: str, case_sensitive: bool = False) -> bool:
+def fuzzy_match_simple(
+    pattern: str, instring: str, case_sensitive: bool = False
+) -> bool:
     """Return True if each character in pattern is found in order in instring.
 
     Args:
@@ -75,4 +81,10 @@ def fuzzy_match_simple(pattern: str, instring: str, case_sensitive: bool = False
 
 
 # Make these the public API
-__all__ = ["fuzzy_match", "get_best_matches", "fuzzy_match_simple"]
+__all__ = [
+    "fuzzy_match",
+    "get_best_matches",
+    "fuzzy_match_simple",
+    "MatchRange",
+    "StreamingFuzzyMatcher",
+]
