@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from sublime_search import (
+    RetryableError,
     apply_diff_hunks,
     apply_diff_hunks_with_hint,
     parse_locationless_diff,
@@ -133,7 +134,8 @@ class TestApplyDiffHunks:
         content = "completely different content"
         diff = " context\n-old\n+new"
 
-        with pytest.raises(ValueError, match="could be applied"):
+        # No match is a retryable error - agent should re-read file
+        with pytest.raises(RetryableError, match="could be applied"):
             apply_diff_hunks(content, diff)
 
     def test_apply_partial_success(self) -> None:

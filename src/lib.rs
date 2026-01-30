@@ -4,6 +4,16 @@ use std::cmp::max;
 use std::ops::Range;
 
 mod content_replacer;
+
+// Create a custom exception for retryable errors.
+// These are errors where the operation failed due to content mismatch,
+// and the caller (e.g., an AI agent) should retry with corrected input.
+pyo3::create_exception!(
+    _sublime_search,
+    RetryableError,
+    pyo3::exceptions::PyException,
+    "Error that indicates the operation should be retried with corrected input.\n\nThis is raised when:\n- Content was not found (agent should re-read the file)\n- Multiple matches exist (agent should add more context)\n\nUnlike ValueError, this signals that retry is appropriate."
+);
 mod diff_parser;
 mod streaming_matcher;
 use streaming_matcher::StreamingFuzzyMatcher;
@@ -429,14 +439,17 @@ fn replace_content(
     match content_replacer::replace_content(content, old_string, new_string, replace_all, line_hint)
     {
         Ok(result) => Ok(result.into()),
+        // NoChange is a programming error - use ValueError
         Err(content_replacer::ReplaceError::NoChange) => Err(PyValueError::new_err(
             "old_string and new_string must be different",
         )),
+        // NotFound is retryable - agent should re-read the file
         Err(content_replacer::ReplaceError::NotFound { message, .. }) => {
-            Err(PyValueError::new_err(message))
+            Err(RetryableError::new_err(message))
         }
+        // MultipleMatches is retryable - agent should add more context
         Err(content_replacer::ReplaceError::MultipleMatches { message, .. }) => {
-            Err(PyValueError::new_err(message))
+            Err(RetryableError::new_err(message))
         }
     }
 }
@@ -473,6 +486,8 @@ struct TryReplaceResult {
     closest_match: Option<FuzzyMatchInfo>,
     #[pyo3(get)]
     locations: Option<Vec<usize>>,
+    #[pyo3(get)]
+    retryable: bool,
 }
 
 #[pymethods]
@@ -534,6 +549,7 @@ fn try_replace_content(
             error_type: None,
             closest_match: None,
             locations: None,
+            retryable: false,
         },
         Err(content_replacer::ReplaceError::NoChange) => TryReplaceResult {
             success: false,
@@ -542,6 +558,7 @@ fn try_replace_content(
             error_type: Some("no_change".to_string()),
             closest_match: None,
             locations: None,
+            retryable: false, // Programming error, not retryable
         },
         Err(content_replacer::ReplaceError::NotFound {
             message,
@@ -553,6 +570,7 @@ fn try_replace_content(
             error_type: Some("not_found".to_string()),
             closest_match: closest_match.map(FuzzyMatchInfo::from),
             locations: None,
+            retryable: true, // Agent should re-read file
         },
         Err(content_replacer::ReplaceError::MultipleMatches { message, locations }) => {
             TryReplaceResult {
@@ -562,6 +580,7 @@ fn try_replace_content(
                 error_type: Some("multiple_matches".to_string()),
                 closest_match: None,
                 locations: Some(locations),
+                retryable: true, // Agent should add more context
             }
         }
     }
@@ -755,11 +774,13 @@ fn apply_diff_hunks(
 ) -> PyResult<PyApplyDiffResult> {
     match diff_parser::apply_diff_hunks(content, diff_text, replace_all) {
         Ok(result) => Ok(PyApplyDiffResult::from(result)),
+        // NoHunksFound is a format error - use ValueError
         Err(diff_parser::ApplyDiffError::NoHunksFound) => {
             Err(PyValueError::new_err("No diff hunks found in input"))
         }
+        // NoHunksApplied is retryable - agent should re-read and provide accurate diff
         Err(diff_parser::ApplyDiffError::NoHunksApplied { message }) => {
-            Err(PyValueError::new_err(message))
+            Err(RetryableError::new_err(message))
         }
     }
 }
@@ -788,11 +809,13 @@ fn apply_diff_hunks_with_hint(
 ) -> PyResult<PyApplyDiffResult> {
     match diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint) {
         Ok(result) => Ok(PyApplyDiffResult::from(result)),
+        // NoHunksFound is a format error - use ValueError
         Err(diff_parser::ApplyDiffError::NoHunksFound) => {
             Err(PyValueError::new_err("No diff hunks found in input"))
         }
+        // NoHunksApplied is retryable - agent should re-read and provide accurate diff
         Err(diff_parser::ApplyDiffError::NoHunksApplied { message }) => {
-            Err(PyValueError::new_err(message))
+            Err(RetryableError::new_err(message))
         }
     }
 }
@@ -842,6 +865,9 @@ fn try_apply_diff_hunks(
 
 #[pymodule]
 fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Exceptions
+    m.add("RetryableError", m.py().get_type::<RetryableError>())?;
+
     // Fuzzy matching functions
     m.add_function(wrap_pyfunction!(fuzzy_match, m)?)?;
     m.add_function(wrap_pyfunction!(get_best_matches, m)?)?;

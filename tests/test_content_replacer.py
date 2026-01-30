@@ -5,12 +5,17 @@ These tests verify the improvements outlined in IMPROVEMENTS.md:
 2. Block anchor threshold
 3. CRLF line ending handling
 4. Enhanced multiple matches error message
+5. RetryableError exception for recoverable errors
 """
 
 from __future__ import annotations
 
 import pytest
-from sublime_search import replace_content, try_replace_content
+from sublime_search import (
+    RetryableError,
+    replace_content,
+    try_replace_content,
+)
 
 
 class TestEmptyStringValidation:
@@ -18,7 +23,7 @@ class TestEmptyStringValidation:
 
     def test_empty_old_string_gives_clear_error(self) -> None:
         """Empty old_string should give a clear 'cannot be empty' error."""
-        with pytest.raises(ValueError, match="cannot be empty"):
+        with pytest.raises(RetryableError, match="cannot be empty"):
             replace_content("some content", "", "new text")
 
     def test_try_replace_empty_string(self) -> None:
@@ -79,7 +84,7 @@ class TestMultipleMatchesPreviews:
         """Multiple matches error should include content previews."""
         content = "def foo():  # Helper\n    pass\n\ndef foo():  # Main\n    pass"
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(RetryableError) as exc_info:
             replace_content(content, "def foo():", "def bar():")
 
         error_msg = str(exc_info.value)
@@ -93,7 +98,7 @@ class TestMultipleMatchesPreviews:
         """Error message should help distinguish between matches."""
         content = "x = 1  # first assignment\ny = 2\nx = 1  # second assignment"
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(RetryableError) as exc_info:
             replace_content(content, "x = 1", "x = 42")
 
         error_msg = str(exc_info.value)
@@ -216,6 +221,7 @@ class TestTryReplaceContent:
         assert result.result is not None
         assert result.result.content == "hello universe"
         assert result.error is None
+        assert not result.retryable
 
     def test_try_replace_not_found(self) -> None:
         """Not found should return falsy result with error details."""
@@ -226,6 +232,7 @@ class TestTryReplaceContent:
         assert result.result is None
         assert result.error_type == "not_found"
         assert result.error is not None
+        assert result.retryable  # Should be retryable
 
     def test_try_replace_multiple_matches(self) -> None:
         """Multiple matches should return falsy result with locations."""
@@ -234,3 +241,51 @@ class TestTryReplaceContent:
         assert not result.success
         assert result.error_type == "multiple_matches"
         assert result.locations == [1, 3]
+        assert result.retryable  # Should be retryable
+
+    def test_try_replace_no_change_not_retryable(self) -> None:
+        """No change error (same old/new) should NOT be retryable."""
+        result = try_replace_content("hello world", "hello", "hello")
+
+        assert not result.success
+        assert result.error_type == "no_change"
+        assert not result.retryable  # Programming error, not retryable
+
+
+class TestRetryableError:
+    """Tests for RetryableError exception."""
+
+    def test_not_found_raises_retryable_error(self) -> None:
+        """Not found should raise RetryableError, not ValueError."""
+        with pytest.raises(RetryableError) as exc_info:
+            replace_content("hello world", "missing text", "new text")
+
+        # Check the error message is helpful
+        assert "not found" in str(exc_info.value).lower()
+
+    def test_multiple_matches_raises_retryable_error(self) -> None:
+        """Multiple matches should raise RetryableError, not ValueError."""
+        with pytest.raises(RetryableError) as exc_info:
+            replace_content("foo\nbar\nfoo", "foo", "replaced")
+
+        assert "multiple" in str(exc_info.value).lower()
+
+    def test_no_change_raises_value_error(self) -> None:
+        """Same old/new string should raise ValueError (not retryable)."""
+        with pytest.raises(ValueError, match="different"):
+            replace_content("hello world", "hello", "hello")
+
+    def test_empty_string_raises_retryable_error(self) -> None:
+        """Empty string should raise RetryableError."""
+        with pytest.raises(RetryableError, match="cannot be empty"):
+            replace_content("hello world", "", "new")
+
+    def test_retryable_error_is_exception(self) -> None:
+        """RetryableError should be a proper Exception subclass."""
+        assert issubclass(RetryableError, Exception)
+
+        # Should be catchable as Exception
+        try:
+            replace_content("content", "not found", "new")
+        except Exception as e:
+            assert isinstance(e, RetryableError)

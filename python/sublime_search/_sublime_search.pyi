@@ -2,6 +2,31 @@
 
 from __future__ import annotations
 
+class RetryableError(Exception):
+    """Error that indicates the operation should be retried with corrected input.
+
+    This is raised when:
+    - Content was not found (agent should re-read the file)
+    - Multiple matches exist (agent should add more context)
+
+    Unlike ValueError, this signals that retry is appropriate.
+    This exception is designed to be caught and converted to framework-specific
+    retry mechanisms (e.g., pydantic-ai's ModelRetry).
+
+    Example:
+        >>> from sublime_search import replace_content, RetryableError
+        >>> try:
+        ...     result = replace_content(content, "not found", "new")
+        ... except RetryableError as e:
+        ...     # Signal agent to retry
+        ...     raise ModelRetry(str(e)) from e
+        ... except ValueError as e:
+        ...     # Programming error, don't retry
+        ...     raise
+    """
+
+    ...
+
 class MatchRange:
     """Represents a text range with start and end byte offsets."""
 
@@ -186,6 +211,16 @@ class TryReplaceResult:
         """List of line numbers if multiple matches found."""
         ...
 
+    @property
+    def retryable(self) -> bool:
+        """Whether this error is suitable for retry.
+
+        True for 'not_found' and 'multiple_matches' errors where
+        the caller (e.g., an AI agent) should retry with corrected input.
+        False for 'no_change' which is a programming error.
+        """
+        ...
+
     def __repr__(self) -> str: ...
     def __bool__(self) -> bool: ...
 
@@ -357,7 +392,10 @@ def replace_content(
         ReplaceResult with the new content and match information
 
     Raises:
-        ValueError: If old_string equals new_string, not found, or multiple matches
+        RetryableError: If old_string not found or multiple matches exist.
+            These are recoverable - caller should retry with corrected input.
+        ValueError: If old_string is empty or equals new_string.
+            These are programming errors that should not be retried.
     """
     ...
 
@@ -443,7 +481,9 @@ def apply_diff_hunks(
         ApplyDiffResult with the modified content and application details
 
     Raises:
-        ValueError: If no diff hunks found or none could be applied
+        RetryableError: If none of the hunks could be applied.
+            Caller should retry with corrected diff context.
+        ValueError: If no diff hunks found in input (format error).
     """
     ...
 
@@ -466,7 +506,9 @@ def apply_diff_hunks_with_hint(
         ApplyDiffResult with the modified content and application details
 
     Raises:
-        ValueError: If no diff hunks found or none could be applied
+        RetryableError: If none of the hunks could be applied.
+            Caller should retry with corrected diff context.
+        ValueError: If no diff hunks found in input (format error).
     """
     ...
 

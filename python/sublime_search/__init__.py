@@ -10,6 +10,8 @@ from ._sublime_search import (
     HunkResult,
     MatchRange,
     ReplaceResult,
+    # Exceptions
+    RetryableError,
     StreamingFuzzyMatcher,
     TryReplaceResult,
     # Functions
@@ -100,6 +102,8 @@ def fuzzy_match_simple(
 
 # Make these the public API
 __all__ = [
+    # Exceptions
+    "RetryableError",
     # Fuzzy matching
     "fuzzy_match",
     "get_best_matches",
