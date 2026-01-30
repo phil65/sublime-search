@@ -92,6 +92,9 @@ pub fn replace_content(
         return Err(ReplaceError::NoChange);
     }
 
+    // Track the search_text that had multiple matches (for error reporting)
+    let mut multiple_match_text: Option<String> = None;
+
     // Define replacer strategies in order
     let strategies: Vec<(&str, fn(&str, &str) -> Vec<String>)> = vec![
         ("simple", simple_replacer),
@@ -136,7 +139,10 @@ pub fn replace_content(
             // Check for multiple occurrences
             let last_index = content.rfind(search_text.as_str());
             if last_index != Some(index) {
-                // Multiple occurrences found
+                // Multiple occurrences found - track for error reporting
+                if multiple_match_text.is_none() {
+                    multiple_match_text = Some(search_text.clone());
+                }
                 if let Some(hint) = line_hint {
                     if let Some(best_index) =
                         find_closest_match(content, search_text, hint as usize)
@@ -193,8 +199,9 @@ pub fn replace_content(
         });
     }
 
-    // Multiple matches found
-    let locations = find_all_match_locations(content, old_string);
+    // Multiple matches found - use the actual search_text that matched
+    let search_for_locations = multiple_match_text.as_deref().unwrap_or(old_string);
+    let locations = find_all_match_locations_exact(content, search_for_locations);
     let message = build_multiple_matches_error(old_string, &locations);
 
     Err(ReplaceError::MultipleMatches { message, locations })
@@ -722,27 +729,18 @@ fn find_closest_match(content: &str, search_text: &str, line_hint: usize) -> Opt
         .map(|(_, index)| index)
 }
 
-/// Find all line numbers where search_text starts.
-fn find_all_match_locations(content: &str, search_text: &str) -> Vec<usize> {
-    let lines: Vec<&str> = content.lines().collect();
+/// Find all line numbers where search_text starts (exact substring matching).
+/// Unlike find_all_match_locations, this does proper exact matching instead of
+/// just checking if the first line is contained.
+fn find_all_match_locations_exact(content: &str, search_text: &str) -> Vec<usize> {
     let mut locations = Vec::new();
+    let mut start = 0;
 
-    let search_lines: Vec<&str> = search_text.lines().collect();
-    let first_search_line = search_lines.first().copied().unwrap_or(search_text);
-
-    for (i, line) in lines.iter().enumerate() {
-        if line.contains(first_search_line) {
-            // Verify full match if multi-line
-            if search_lines.len() > 1 {
-                let window_end = (i + search_lines.len()).min(lines.len());
-                let window = lines[i..window_end].join("\n");
-                if window.contains(search_text) {
-                    locations.push(i + 1); // 1-based
-                }
-            } else {
-                locations.push(i + 1); // 1-based
-            }
-        }
+    while let Some(index) = content[start..].find(search_text) {
+        let abs_index = start + index;
+        let line_num = content[..abs_index].matches('\n').count() + 1;
+        locations.push(line_num);
+        start = abs_index + 1;
     }
 
     locations

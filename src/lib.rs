@@ -758,12 +758,8 @@ fn apply_diff_hunks(
         Err(diff_parser::ApplyDiffError::NoHunksFound) => {
             Err(PyValueError::new_err("No diff hunks found in input"))
         }
-        Err(diff_parser::ApplyDiffError::NoHunksApplied { message, .. }) => {
+        Err(diff_parser::ApplyDiffError::NoHunksApplied { message }) => {
             Err(PyValueError::new_err(message))
-        }
-        Err(diff_parser::ApplyDiffError::PartialApplication { .. }) => {
-            // This shouldn't happen as we return Ok for partial
-            Err(PyValueError::new_err("Partial application error"))
         }
     }
 }
@@ -795,11 +791,8 @@ fn apply_diff_hunks_with_hint(
         Err(diff_parser::ApplyDiffError::NoHunksFound) => {
             Err(PyValueError::new_err("No diff hunks found in input"))
         }
-        Err(diff_parser::ApplyDiffError::NoHunksApplied { message, .. }) => {
+        Err(diff_parser::ApplyDiffError::NoHunksApplied { message }) => {
             Err(PyValueError::new_err(message))
-        }
-        Err(diff_parser::ApplyDiffError::PartialApplication { .. }) => {
-            Err(PyValueError::new_err("Partial application error"))
         }
     }
 }
@@ -844,18 +837,6 @@ fn try_apply_diff_hunks(
                 all_applied: false,
             })
         }
-        Err(diff_parser::ApplyDiffError::PartialApplication {
-            content: new_content,
-            applied_count,
-            total_count,
-            ..
-        }) => Some(PyApplyDiffResult {
-            content: new_content,
-            applied_count,
-            total_count,
-            hunk_results: Vec::new(),
-            all_applied: false,
-        }),
     }
 }
 

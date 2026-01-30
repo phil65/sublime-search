@@ -55,18 +55,7 @@ pub enum ApplyDiffError {
     /// No diff hunks found in the input.
     NoHunksFound,
     /// No hunks could be applied.
-    NoHunksApplied {
-        message: String,
-        total_hunks: usize,
-        failed_previews: Vec<String>,
-    },
-    /// Some hunks failed (partial application).
-    PartialApplication {
-        content: String,
-        applied_count: usize,
-        total_count: usize,
-        failed_previews: Vec<String>,
-    },
+    NoHunksApplied { message: String },
 }
 
 // Compiled regex patterns for diff extraction
@@ -257,7 +246,13 @@ pub fn apply_diff_hunks(
         }
 
         // Try to apply this hunk using replace_content
-        match replace_content(&current_content, &hunk.old_text, &hunk.new_text, replace_all, None) {
+        match replace_content(
+            &current_content,
+            &hunk.old_text,
+            &hunk.new_text,
+            replace_all,
+            None,
+        ) {
             Ok(result) => {
                 current_content = result.content;
                 applied_count += 1;
@@ -304,11 +299,7 @@ pub fn apply_diff_hunks(
              Please read the file again and provide accurate diff context.",
             total_count
         );
-        return Err(ApplyDiffError::NoHunksApplied {
-            message,
-            total_hunks: total_count,
-            failed_previews,
-        });
+        return Err(ApplyDiffError::NoHunksApplied { message });
     }
 
     // Return success even for partial application - let caller decide how to handle
@@ -416,11 +407,7 @@ pub fn apply_diff_hunks_with_hint(
              Please read the file again and provide accurate diff context.",
             total_count
         );
-        return Err(ApplyDiffError::NoHunksApplied {
-            message,
-            total_hunks: total_count,
-            failed_previews,
-        });
+        return Err(ApplyDiffError::NoHunksApplied { message });
     }
 
     Ok(ApplyDiffResult {
