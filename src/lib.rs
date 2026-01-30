@@ -4,6 +4,7 @@ use std::cmp::max;
 use std::ops::Range;
 
 mod content_replacer;
+mod diff_parser;
 mod streaming_matcher;
 use streaming_matcher::StreamingFuzzyMatcher;
 
@@ -566,6 +567,298 @@ fn try_replace_content(
     }
 }
 
+// ============================================================================
+// Diff Parser Bindings
+// ============================================================================
+
+/// A single diff hunk representing one edit operation.
+#[pyclass(name = "DiffHunk")]
+#[derive(Clone)]
+struct PyDiffHunk {
+    #[pyo3(get)]
+    old_text: String,
+    #[pyo3(get)]
+    new_text: String,
+    #[pyo3(get)]
+    raw: String,
+}
+
+#[pymethods]
+impl PyDiffHunk {
+    fn __repr__(&self) -> String {
+        let old_preview: String = self.old_text.chars().take(30).collect();
+        let new_preview: String = self.new_text.chars().take(30).collect();
+        format!(
+            "DiffHunk(old='{}{}', new='{}{}')",
+            old_preview,
+            if self.old_text.len() > 30 { "..." } else { "" },
+            new_preview,
+            if self.new_text.len() > 30 { "..." } else { "" }
+        )
+    }
+}
+
+impl From<diff_parser::DiffHunk> for PyDiffHunk {
+    fn from(h: diff_parser::DiffHunk) -> Self {
+        PyDiffHunk {
+            old_text: h.old_text,
+            new_text: h.new_text,
+            raw: h.raw,
+        }
+    }
+}
+
+/// Result of applying a single hunk.
+#[pyclass(name = "HunkResult")]
+#[derive(Clone)]
+struct PyHunkResult {
+    #[pyo3(get)]
+    success: bool,
+    #[pyo3(get)]
+    strategy: Option<String>,
+    #[pyo3(get)]
+    error: Option<String>,
+    #[pyo3(get)]
+    start_line: Option<usize>,
+    #[pyo3(get)]
+    end_line: Option<usize>,
+}
+
+#[pymethods]
+impl PyHunkResult {
+    fn __repr__(&self) -> String {
+        if self.success {
+            format!(
+                "HunkResult(success=True, strategy={:?}, lines={:?}-{:?})",
+                self.strategy, self.start_line, self.end_line
+            )
+        } else {
+            format!("HunkResult(success=False, error={:?})", self.error)
+        }
+    }
+
+    fn __bool__(&self) -> bool {
+        self.success
+    }
+}
+
+impl From<diff_parser::HunkResult> for PyHunkResult {
+    fn from(r: diff_parser::HunkResult) -> Self {
+        PyHunkResult {
+            success: r.success,
+            strategy: r.strategy,
+            error: r.error,
+            start_line: r.start_line,
+            end_line: r.end_line,
+        }
+    }
+}
+
+/// Result of applying all diff hunks.
+#[pyclass(name = "ApplyDiffResult")]
+#[derive(Clone)]
+struct PyApplyDiffResult {
+    #[pyo3(get)]
+    content: String,
+    #[pyo3(get)]
+    applied_count: usize,
+    #[pyo3(get)]
+    total_count: usize,
+    #[pyo3(get)]
+    hunk_results: Vec<PyHunkResult>,
+    #[pyo3(get)]
+    all_applied: bool,
+}
+
+#[pymethods]
+impl PyApplyDiffResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "ApplyDiffResult(applied={}/{}, all_applied={})",
+            self.applied_count, self.total_count, self.all_applied
+        )
+    }
+
+    fn __bool__(&self) -> bool {
+        self.all_applied
+    }
+}
+
+impl From<diff_parser::ApplyDiffResult> for PyApplyDiffResult {
+    fn from(r: diff_parser::ApplyDiffResult) -> Self {
+        PyApplyDiffResult {
+            content: r.content,
+            applied_count: r.applied_count,
+            total_count: r.total_count,
+            hunk_results: r.hunk_results.into_iter().map(PyHunkResult::from).collect(),
+            all_applied: r.all_applied,
+        }
+    }
+}
+
+/// Parse a locationless unified diff into DiffHunk objects.
+///
+/// Handles diff format without line numbers - the location is inferred
+/// by matching context in the file.
+///
+/// Format expected:
+/// ```
+///  context line (unchanged)
+/// -removed line
+/// +added line
+///  more context
+/// ```
+///
+/// Multiple hunks are separated by:
+/// - Blank lines (empty line not starting with space)
+/// - Non-diff content lines
+///
+/// Also handles:
+/// - Content wrapped in <diff>...</diff> tags
+/// - Content wrapped in ```diff...``` code blocks
+/// - Standard diff headers (---, +++, @@, etc.) which are skipped
+///
+/// Args:
+///     diff_text: The diff text (may contain multiple hunks)
+///
+/// Returns:
+///     List of DiffHunk objects with old_text/new_text pairs
+#[pyfunction]
+fn parse_locationless_diff(diff_text: &str) -> Vec<PyDiffHunk> {
+    diff_parser::parse_locationless_diff(diff_text)
+        .into_iter()
+        .map(PyDiffHunk::from)
+        .collect()
+}
+
+/// Apply locationless diff edits to content.
+///
+/// Parses diff format and applies each hunk using content matching
+/// via multi-strategy fuzzy replacement.
+///
+/// Args:
+///     content: The original file content
+///     diff_text: The diff text containing hunks to apply
+///     replace_all: Whether to replace all occurrences of each pattern (default: False)
+///
+/// Returns:
+///     ApplyDiffResult with the modified content and application details
+///
+/// Raises:
+///     ValueError: If no diff hunks found or none could be applied
+#[pyfunction]
+#[pyo3(signature = (content, diff_text, replace_all=false))]
+fn apply_diff_hunks(
+    content: &str,
+    diff_text: &str,
+    replace_all: bool,
+) -> PyResult<PyApplyDiffResult> {
+    match diff_parser::apply_diff_hunks(content, diff_text, replace_all) {
+        Ok(result) => Ok(PyApplyDiffResult::from(result)),
+        Err(diff_parser::ApplyDiffError::NoHunksFound) => {
+            Err(PyValueError::new_err("No diff hunks found in input"))
+        }
+        Err(diff_parser::ApplyDiffError::NoHunksApplied { message, .. }) => {
+            Err(PyValueError::new_err(message))
+        }
+        Err(diff_parser::ApplyDiffError::PartialApplication { .. }) => {
+            // This shouldn't happen as we return Ok for partial
+            Err(PyValueError::new_err("Partial application error"))
+        }
+    }
+}
+
+/// Apply locationless diff edits with line hint for disambiguation.
+///
+/// Similar to apply_diff_hunks but accepts an optional line hint
+/// to help disambiguate when multiple matches exist.
+///
+/// Args:
+///     content: The original file content
+///     diff_text: The diff text containing hunks to apply
+///     line_hint: Optional line number hint for disambiguation
+///
+/// Returns:
+///     ApplyDiffResult with the modified content and application details
+///
+/// Raises:
+///     ValueError: If no diff hunks found or none could be applied
+#[pyfunction]
+#[pyo3(signature = (content, diff_text, line_hint=None))]
+fn apply_diff_hunks_with_hint(
+    content: &str,
+    diff_text: &str,
+    line_hint: Option<u32>,
+) -> PyResult<PyApplyDiffResult> {
+    match diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint) {
+        Ok(result) => Ok(PyApplyDiffResult::from(result)),
+        Err(diff_parser::ApplyDiffError::NoHunksFound) => {
+            Err(PyValueError::new_err("No diff hunks found in input"))
+        }
+        Err(diff_parser::ApplyDiffError::NoHunksApplied { message, .. }) => {
+            Err(PyValueError::new_err(message))
+        }
+        Err(diff_parser::ApplyDiffError::PartialApplication { .. }) => {
+            Err(PyValueError::new_err("Partial application error"))
+        }
+    }
+}
+
+/// Try to apply diff hunks, returning a result object instead of raising.
+///
+/// This is useful when you want to handle partial application or errors
+/// programmatically rather than catching exceptions.
+///
+/// Args:
+///     content: The original file content
+///     diff_text: The diff text containing hunks to apply
+///     replace_all: Whether to replace all occurrences (default: False)
+///     line_hint: Optional line number hint for disambiguation
+///
+/// Returns:
+///     ApplyDiffResult with success info, or None if no hunks found.
+#[pyfunction]
+#[pyo3(signature = (content, diff_text, replace_all=false, line_hint=None))]
+fn try_apply_diff_hunks(
+    content: &str,
+    diff_text: &str,
+    replace_all: bool,
+    line_hint: Option<u32>,
+) -> Option<PyApplyDiffResult> {
+    let result = if line_hint.is_some() {
+        diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint)
+    } else {
+        diff_parser::apply_diff_hunks(content, diff_text, replace_all)
+    };
+
+    match result {
+        Ok(r) => Some(PyApplyDiffResult::from(r)),
+        Err(diff_parser::ApplyDiffError::NoHunksFound) => None,
+        Err(diff_parser::ApplyDiffError::NoHunksApplied { .. }) => {
+            // Return a result with 0 applied for inspection
+            Some(PyApplyDiffResult {
+                content: content.to_string(),
+                applied_count: 0,
+                total_count: diff_parser::parse_locationless_diff(diff_text).len(),
+                hunk_results: Vec::new(),
+                all_applied: false,
+            })
+        }
+        Err(diff_parser::ApplyDiffError::PartialApplication {
+            content: new_content,
+            applied_count,
+            total_count,
+            ..
+        }) => Some(PyApplyDiffResult {
+            content: new_content,
+            applied_count,
+            total_count,
+            hunk_results: Vec::new(),
+            all_applied: false,
+        }),
+    }
+}
+
 #[pymodule]
 fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Fuzzy matching functions
@@ -578,12 +871,21 @@ fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(try_replace_content, m)?)?;
     m.add_function(wrap_pyfunction!(trim_diff, m)?)?;
 
+    // Diff parsing functions
+    m.add_function(wrap_pyfunction!(parse_locationless_diff, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_diff_hunks, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_diff_hunks_with_hint, m)?)?;
+    m.add_function(wrap_pyfunction!(try_apply_diff_hunks, m)?)?;
+
     // Classes
     m.add_class::<PyStreamingFuzzyMatcher>()?;
     m.add_class::<MatchRange>()?;
     m.add_class::<ReplaceResult>()?;
     m.add_class::<TryReplaceResult>()?;
     m.add_class::<FuzzyMatchInfo>()?;
+    m.add_class::<PyDiffHunk>()?;
+    m.add_class::<PyHunkResult>()?;
+    m.add_class::<PyApplyDiffResult>()?;
 
     Ok(())
 }

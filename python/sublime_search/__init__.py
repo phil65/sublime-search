@@ -3,13 +3,22 @@ from __future__ import annotations
 from importlib.metadata import version
 
 from ._sublime_search import (
+    # Classes
+    ApplyDiffResult,
+    DiffHunk,
     FuzzyMatchInfo,
+    HunkResult,
     MatchRange,
     ReplaceResult,
     StreamingFuzzyMatcher,
     TryReplaceResult,
+    # Functions
+    apply_diff_hunks,
+    apply_diff_hunks_with_hint,
+    parse_locationless_diff,
     replace_content,
     trim_diff,
+    try_apply_diff_hunks,
     try_replace_content,
 )
 
@@ -105,4 +114,12 @@ __all__ = [
     "ReplaceResult",
     "TryReplaceResult",
     "FuzzyMatchInfo",
+    # Diff parsing
+    "parse_locationless_diff",
+    "apply_diff_hunks",
+    "apply_diff_hunks_with_hint",
+    "try_apply_diff_hunks",
+    "DiffHunk",
+    "HunkResult",
+    "ApplyDiffResult",
 ]
