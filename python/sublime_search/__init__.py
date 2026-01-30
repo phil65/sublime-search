@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from importlib.metadata import version
 
-from ._sublime_search import MatchRange, StreamingFuzzyMatcher
+from ._sublime_search import (
+    FuzzyMatchInfo,
+    MatchRange,
+    ReplaceResult,
+    StreamingFuzzyMatcher,
+    TryReplaceResult,
+    replace_content,
+    try_replace_content,
+)
 
 # Import the Rust-compiled extension
 from ._sublime_search import fuzzy_match as _fuzzy_match
@@ -82,9 +90,17 @@ def fuzzy_match_simple(
 
 # Make these the public API
 __all__ = [
+    # Fuzzy matching
     "fuzzy_match",
     "get_best_matches",
     "fuzzy_match_simple",
+    # Streaming matcher
     "MatchRange",
     "StreamingFuzzyMatcher",
+    # Content replacement
+    "replace_content",
+    "try_replace_content",
+    "ReplaceResult",
+    "TryReplaceResult",
+    "FuzzyMatchInfo",
 ]
