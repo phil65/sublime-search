@@ -61,7 +61,10 @@ pub struct FuzzyMatchInfo {
 const FUZZY_THRESHOLD: f64 = 0.8;
 
 /// Single candidate similarity threshold.
-const SINGLE_CANDIDATE_THRESHOLD: f64 = 0.0;
+/// Set to 0.6 to require meaningful similarity between search and content blocks.
+/// A threshold of 0.0 would accept any block where first/last lines match,
+/// regardless of middle content similarity, which can replace wrong code silently.
+const SINGLE_CANDIDATE_THRESHOLD: f64 = 0.6;
 
 /// Multiple candidates similarity threshold.
 const MULTIPLE_CANDIDATES_THRESHOLD: f64 = 0.3;
@@ -88,9 +91,24 @@ pub fn replace_content(
     replace_all: bool,
     line_hint: Option<u32>,
 ) -> Result<ReplaceResult, ReplaceError> {
+    // Validate inputs
+    if old_string.is_empty() {
+        return Err(ReplaceError::NotFound {
+            message: "Search text cannot be empty".to_string(),
+            closest_match: None,
+        });
+    }
+
     if old_string == new_string {
         return Err(ReplaceError::NoChange);
     }
+
+    // Normalize CRLF line endings to LF for consistent matching
+    // This handles the case where content has Windows line endings (\r\n)
+    // but search text has Unix line endings (\n) or vice versa
+    let content = content.replace("\r\n", "\n");
+    let old_string = old_string.replace("\r\n", "\n");
+    let new_string = new_string.replace("\r\n", "\n");
 
     // Track the search_text that had multiple matches (for error reporting)
     let mut multiple_match_text: Option<String> = None;
@@ -110,7 +128,7 @@ pub fn replace_content(
     let mut found_matches = false;
 
     for (strategy_name, replacer) in &strategies {
-        let matches = replacer(content, old_string);
+        let matches = replacer(&content, &old_string);
         if matches.is_empty() {
             continue;
         }
@@ -123,7 +141,7 @@ pub fn replace_content(
             };
 
             if replace_all {
-                let new_content = content.replace(search_text.as_str(), new_string);
+                let new_content = content.replace(search_text.as_str(), &new_string);
                 let start_line = content[..index].matches('\n').count() + 1;
                 let end_line = start_line + search_text.matches('\n').count();
 
@@ -145,12 +163,12 @@ pub fn replace_content(
                 }
                 if let Some(hint) = line_hint {
                     if let Some(best_index) =
-                        find_closest_match(content, search_text, hint as usize)
+                        find_closest_match(&content, search_text, hint as usize)
                     {
                         let new_content = format!(
                             "{}{}{}",
                             &content[..best_index],
-                            new_string,
+                            &new_string,
                             &content[best_index + search_text.len()..]
                         );
                         let start_line = content[..best_index].matches('\n').count() + 1;
@@ -172,7 +190,7 @@ pub fn replace_content(
             let new_content = format!(
                 "{}{}{}",
                 &content[..index],
-                new_string,
+                &new_string,
                 &content[index + search_text.len()..]
             );
             let start_line = content[..index].matches('\n').count() + 1;
@@ -190,8 +208,8 @@ pub fn replace_content(
 
     if !found_matches {
         // Build helpful error with fuzzy match context
-        let closest = find_best_fuzzy_match(content, old_string, FUZZY_THRESHOLD);
-        let message = build_not_found_error(content, old_string, closest.as_ref());
+        let closest = find_best_fuzzy_match(&content, &old_string, FUZZY_THRESHOLD);
+        let message = build_not_found_error(&content, &old_string, closest.as_ref());
 
         return Err(ReplaceError::NotFound {
             message,
@@ -200,9 +218,9 @@ pub fn replace_content(
     }
 
     // Multiple matches found - use the actual search_text that matched
-    let search_for_locations = multiple_match_text.as_deref().unwrap_or(old_string);
-    let locations = find_all_match_locations_exact(content, search_for_locations);
-    let message = build_multiple_matches_error(old_string, &locations);
+    let search_for_locations = multiple_match_text.as_deref().unwrap_or(&old_string);
+    let locations = find_all_match_locations_exact(&content, search_for_locations);
+    let message = build_multiple_matches_error(&content, &old_string, &locations);
 
     Err(ReplaceError::MultipleMatches { message, locations })
 }
@@ -1001,8 +1019,8 @@ fn build_not_found_error(
     error_parts.join("")
 }
 
-/// Build error message for multiple matches.
-fn build_multiple_matches_error(old_string: &str, locations: &[usize]) -> String {
+/// Build error message for multiple matches with content previews.
+fn build_multiple_matches_error(content: &str, old_string: &str, locations: &[usize]) -> String {
     let search_preview: String = old_string
         .lines()
         .next()
@@ -1027,13 +1045,33 @@ fn build_multiple_matches_error(old_string: &str, locations: &[usize]) -> String
             .join(", ")
     };
 
+    // Build preview of each location to help user distinguish matches
+    let lines: Vec<&str> = content.lines().collect();
+    let mut previews = String::new();
+    for &loc in locations.iter().take(5) {
+        let line_idx = loc.saturating_sub(1);
+        if line_idx < lines.len() {
+            let preview: String = lines[line_idx].chars().take(60).collect();
+            let line_ellipsis = if lines[line_idx].len() > 60 {
+                "..."
+            } else {
+                ""
+            };
+            previews.push_str(&format!("\n  Line {}: {}{}", loc, preview, line_ellipsis));
+        }
+    }
+    if locations.len() > 5 {
+        previews.push_str(&format!("\n  ... and {} more", locations.len() - 5));
+    }
+
     format!(
         "Pattern found at multiple locations (lines: {}).\n\
-         Search text starts with: \"{}{}\"\n\n\
-         To fix, include more surrounding context in old_string to uniquely identify \
+         Search text starts with: \"{}{}\"\n\
+         \nMatch previews:{}\
+         \n\nTo fix, include more surrounding context in old_string to uniquely identify \
          the target location, or use replace_all=True to replace all occurrences, \
          or provide a line_hint to select the closest match.",
-        location_str, search_preview, ellipsis
+        location_str, search_preview, ellipsis, previews
     )
 }
 
@@ -1372,17 +1410,42 @@ mod tests {
 
     #[test]
     fn test_context_aware_matching() {
+        // Test context-aware matching with similar middle content
+        // The middle line "# comment" vs "# coment" has high similarity (~0.9)
         let content = "def test():\n    # comment\n    return True\n\ndef other():\n    pass";
         let result = replace_content(
             content,
-            "def test():\n    # different comment\n    return True",
+            "def test():\n    # coment\n    return True", // Minor typo in "comment"
             "def test():\n    return False",
             false,
             None,
         );
 
-        // Should match via context-aware strategy due to matching first/last lines
-        assert!(result.is_ok());
+        // Should match because middle line similarity is above threshold (0.6)
+        assert!(result.is_ok(), "Expected match with similar middle content");
+    }
+
+    #[test]
+    fn test_context_aware_rejects_dissimilar() {
+        // Test that context-aware matching rejects very different middle content
+        let content = "def test():\n    # comment\n    return True\n\ndef other():\n    pass";
+        let result = replace_content(
+            content,
+            "def test():\n    # completely different comment text here\n    return True",
+            "def test():\n    return False",
+            false,
+            None,
+        );
+
+        // Should fail because middle line similarity is below threshold
+        assert!(
+            result.is_err()
+                || result
+                    .as_ref()
+                    .map(|r| r.strategy != "block_anchor" && r.strategy != "context_aware")
+                    .unwrap_or(false),
+            "Should not match via anchor-based strategy with dissimilar middle content"
+        );
     }
 
     // ========================================================================
@@ -1537,5 +1600,115 @@ def other_function():
         let diff = "";
         let trimmed = trim_diff(diff);
         assert_eq!(trimmed, "");
+    }
+
+    // ========================================================================
+    // Improvement Tests (from IMPROVEMENTS.md)
+    // ========================================================================
+
+    #[test]
+    fn test_empty_string_validation() {
+        // Empty old_string should give a clear error message
+        let content = "some content";
+        let result = replace_content(content, "", "new", false, None);
+
+        match result {
+            Err(ReplaceError::NotFound { message, .. }) => {
+                assert!(
+                    message.contains("cannot be empty"),
+                    "Expected clear error for empty search text, got: {}",
+                    message
+                );
+            }
+            _ => panic!("Expected NotFound error for empty search text"),
+        }
+    }
+
+    #[test]
+    fn test_crlf_content_with_lf_search() {
+        // Content has CRLF (Windows), search has LF (Unix)
+        let content = "line 1\r\nline 2\r\nline 3";
+        let result = replace_content(content, "line 2", "replaced", false, None).unwrap();
+
+        // Should work due to CRLF normalization
+        assert!(result.content.contains("replaced"));
+        assert_eq!(result.start_line, 2);
+    }
+
+    #[test]
+    fn test_lf_content_with_crlf_search() {
+        // Content has LF, search has CRLF
+        let content = "line 1\nline 2\nline 3";
+        let result = replace_content(content, "line 1\r\nline 2", "replaced", false, None).unwrap();
+
+        // Should work due to CRLF normalization
+        assert!(result.content.contains("replaced"));
+    }
+
+    #[test]
+    fn test_multiline_crlf_normalization() {
+        // Both content and search have CRLF
+        let content = "def foo():\r\n    return 1\r\n";
+        let result = replace_content(
+            content,
+            "def foo():\r\n    return 1",
+            "def foo():\n    return 2",
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert!(result.content.contains("return 2"));
+    }
+
+    #[test]
+    fn test_multiple_matches_error_includes_previews() {
+        let content = "def foo():  # Helper\n    pass\n\ndef foo():  # Main\n    pass";
+        let result = replace_content(content, "def foo():", "def bar():", false, None);
+
+        match result {
+            Err(ReplaceError::MultipleMatches { message, locations }) => {
+                // Should include line numbers
+                assert!(message.contains("lines:"));
+                // Should include preview text
+                assert!(message.contains("Match previews"));
+                // Should include at least one preview line
+                assert!(message.contains("Line "));
+                // Locations should be correct
+                assert_eq!(locations, vec![1, 4]);
+            }
+            _ => panic!("Expected MultipleMatches error"),
+        }
+    }
+
+    #[test]
+    fn test_block_anchor_requires_similarity() {
+        // Test that block anchor matching now requires meaningful similarity
+        // The middle content differs significantly
+        let content = "def function():\n    yield item * 2\n    return True";
+        let find = "def function():\n    yield item * 3\n    return True"; // Different middle
+
+        // With the new threshold of 0.6, this should still match if similarity is reasonable
+        // The similarity should be high enough since only one character differs
+        let matches = block_anchor_replacer(content, find);
+
+        // Should match because similarity is still high (only "2" vs "3" differs)
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn test_block_anchor_rejects_low_similarity() {
+        // Block anchor should reject when middle content is very different
+        let content = "def function():\n    completely different code here\n    return True";
+        let find = "def function():\n    something entirely else\n    return True";
+
+        let matches = block_anchor_replacer(content, find);
+
+        // Should NOT match because middle line similarity is too low
+        // This tests the SINGLE_CANDIDATE_THRESHOLD = 0.6 improvement
+        assert!(
+            matches.is_empty(),
+            "Block anchor should reject low similarity matches"
+        );
     }
 }
