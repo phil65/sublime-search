@@ -440,6 +440,22 @@ fn replace_content(
     }
 }
 
+/// Trim common indentation from diff output.
+///
+/// This removes the minimum common indentation from all content lines
+/// in a unified diff, making it more readable when the diff is from
+/// deeply indented code.
+///
+/// Args:
+///     diff_text: A unified diff string
+///
+/// Returns:
+///     The diff with common indentation removed from content lines
+#[pyfunction]
+fn trim_diff(diff_text: &str) -> String {
+    content_replacer::trim_diff(diff_text)
+}
+
 /// Result from try_replace_content - either success with result, or failure with error details.
 #[pyclass]
 #[derive(Clone)]
@@ -560,6 +576,7 @@ fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Content replacement functions
     m.add_function(wrap_pyfunction!(replace_content, m)?)?;
     m.add_function(wrap_pyfunction!(try_replace_content, m)?)?;
+    m.add_function(wrap_pyfunction!(trim_diff, m)?)?;
 
     // Classes
     m.add_class::<PyStreamingFuzzyMatcher>()?;

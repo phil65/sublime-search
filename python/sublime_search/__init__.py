@@ -9,6 +9,7 @@ from ._sublime_search import (
     StreamingFuzzyMatcher,
     TryReplaceResult,
     replace_content,
+    trim_diff,
     try_replace_content,
 )
 
@@ -100,6 +101,7 @@ __all__ = [
     # Content replacement
     "replace_content",
     "try_replace_content",
+    "trim_diff",
     "ReplaceResult",
     "TryReplaceResult",
     "FuzzyMatchInfo",

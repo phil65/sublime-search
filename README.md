@@ -158,6 +158,7 @@ matcher.source_lines  # Source text split into lines
 | `get_best_matches(pattern, candidates)` | Find all matches sorted by score |
 | `replace_content(content, old, new, replace_all=False, line_hint=None)` | Replace text with fallback strategies |
 | `try_replace_content(...)` | Non-raising version of `replace_content` |
+| `trim_diff(diff_text)` | Remove common indentation from unified diff output |
 
 ### Classes
 

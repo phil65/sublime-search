@@ -827,6 +827,67 @@ fn find_best_fuzzy_match(
     best_match
 }
 
+/// Trim common indentation from diff output.
+///
+/// This removes the minimum common indentation from all content lines
+/// in a unified diff, making it more readable when the diff is from
+/// deeply indented code.
+pub fn trim_diff(diff_text: &str) -> String {
+    let lines: Vec<&str> = diff_text.lines().collect();
+
+    // Find content lines (those starting with +, -, or space, but not --- or +++)
+    let content_lines: Vec<&str> = lines
+        .iter()
+        .filter(|line| {
+            (line.starts_with('+') || line.starts_with('-') || line.starts_with(' '))
+                && !line.starts_with("---")
+                && !line.starts_with("+++")
+        })
+        .copied()
+        .collect();
+
+    if content_lines.is_empty() {
+        return diff_text.to_string();
+    }
+
+    // Find minimum indentation
+    let mut min_indent = usize::MAX;
+    for line in &content_lines {
+        let content = &line[1..]; // Remove +/- prefix
+        if !content.trim().is_empty() {
+            let indent = content.len() - content.trim_start().len();
+            min_indent = min_indent.min(indent);
+        }
+    }
+
+    if min_indent == usize::MAX || min_indent == 0 {
+        return diff_text.to_string();
+    }
+
+    // Trim indentation from each line
+    let trimmed_lines: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            if (line.starts_with('+') || line.starts_with('-') || line.starts_with(' '))
+                && !line.starts_with("---")
+                && !line.starts_with("+++")
+            {
+                let prefix = &line[..1];
+                let content = &line[1..];
+                if content.len() >= min_indent {
+                    format!("{}{}", prefix, &content[min_indent..])
+                } else {
+                    line.to_string()
+                }
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+
+    trimmed_lines.join("\n")
+}
+
 /// Calculate similarity ratio between two strings (0.0 to 1.0).
 fn calculate_similarity(s1: &str, s2: &str) -> f64 {
     if s1.is_empty() && s2.is_empty() {
@@ -1439,5 +1500,44 @@ def other_function():
         let content = "line 1\r\nline 2\r\nline 3";
         let result = replace_content(content, "line 2", "replaced", false, None).unwrap();
         assert!(result.content.contains("replaced"));
+    }
+
+    // ========================================================================
+    // Trim Diff Tests
+    // ========================================================================
+
+    #[test]
+    fn test_trim_diff_removes_common_indent() {
+        let diff = "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,3 @@\n     def foo():\n-        return 1\n+        return 2\n     pass";
+        let trimmed = trim_diff(diff);
+
+        // Should remove 4 spaces of common indent from content lines
+        assert!(trimmed.contains("-    return 1") || trimmed.contains("- return 1"));
+        assert!(trimmed.contains("+    return 2") || trimmed.contains("+ return 2"));
+    }
+
+    #[test]
+    fn test_trim_diff_preserves_headers() {
+        let diff = "--- a/file.py\n+++ b/file.py\n-old\n+new";
+        let trimmed = trim_diff(diff);
+
+        assert!(trimmed.contains("--- a/file.py"));
+        assert!(trimmed.contains("+++ b/file.py"));
+    }
+
+    #[test]
+    fn test_trim_diff_no_indent() {
+        let diff = "-old line\n+new line";
+        let trimmed = trim_diff(diff);
+
+        // No common indent, should be unchanged
+        assert_eq!(trimmed, diff);
+    }
+
+    #[test]
+    fn test_trim_diff_empty() {
+        let diff = "";
+        let trimmed = trim_diff(diff);
+        assert_eq!(trimmed, "");
     }
 }
