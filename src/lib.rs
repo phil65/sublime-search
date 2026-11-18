@@ -197,7 +197,7 @@ fn fuzzy_match_simple(pattern: &str, instring: &str, case_sensitive: bool) -> bo
 }
 
 /// Python wrapper for a match range.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct MatchRange {
     #[pyo3(get)]
@@ -321,7 +321,7 @@ impl PyStreamingFuzzyMatcher {
 // ============================================================================
 
 /// Result of a successful replacement operation.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct ReplaceResult {
     #[pyo3(get)]
@@ -366,7 +366,7 @@ impl From<content_replacer::ReplaceResult> for ReplaceResult {
 }
 
 /// Information about a fuzzy match when replacement fails.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct FuzzyMatchInfo {
     #[pyo3(get)]
@@ -471,7 +471,7 @@ fn trim_diff(diff_text: &str) -> String {
 }
 
 /// Result from try_replace_content - either success with result, or failure with error details.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct TryReplaceResult {
     #[pyo3(get)]
@@ -591,7 +591,7 @@ fn try_replace_content(
 // ============================================================================
 
 /// A single diff hunk representing one edit operation.
-#[pyclass(name = "DiffHunk")]
+#[pyclass(name = "DiffHunk", from_py_object)]
 #[derive(Clone)]
 struct PyDiffHunk {
     #[pyo3(get)]
@@ -628,7 +628,7 @@ impl From<diff_parser::DiffHunk> for PyDiffHunk {
 }
 
 /// Result of applying a single hunk.
-#[pyclass(name = "HunkResult")]
+#[pyclass(name = "HunkResult", from_py_object)]
 #[derive(Clone)]
 struct PyHunkResult {
     #[pyo3(get)]
@@ -674,7 +674,7 @@ impl From<diff_parser::HunkResult> for PyHunkResult {
 }
 
 /// Result of applying all diff hunks.
-#[pyclass(name = "ApplyDiffResult")]
+#[pyclass(name = "ApplyDiffResult", from_py_object)]
 #[derive(Clone)]
 struct PyApplyDiffResult {
     #[pyo3(get)]
