@@ -1,35 +1,65 @@
-[build-system]
-requires = ["maturin>=1.8,<2.0"]
-build-backend = "maturin"
-
 [project]
 name = "sublime-search"
+description = "Fast Rust-powered fuzzy matching, fuzzy search-and-replace and locationless diff application for Python"
+readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+  { name = "Philipp Temminghoff", email = "philipptemminghoff@googlemail.com" },
+]
+keywords = [
+  "code-editing",
+  "diff",
+  "fuzzy",
+  "fuzzy-matching",
+  "fuzzy-search",
+  "llm",
+  "patch",
+  "rust",
+  "search-replace",
+  "sublime-text",
+]
 classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+  "Programming Language :: Python :: Free Threading",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Text Editors",
+  "Topic :: Text Processing",
+  "Typing :: Typed",
 ]
 dynamic = ["version"]
 
 [project.urls]
-Documentation = "https://phil65.github.io/sublime-search/"
-Source = "https://github.com/phil65/sublime-search"
+Documentation = "https://github.com/phil65/sublime-search#readme"
+Homepage = "https://github.com/phil65/sublime-search"
 Issues = "https://github.com/phil65/sublime-search/issues"
-Discussions = "https://github.com/phil65/sublime-search/discussions"
-"Code coverage" = "https://app.codecov.io/gh/phil65/sublime-search"
+Source = "https://github.com/phil65/sublime-search"
 
+[dependency-groups]
+dev = ["maturin>=1.8,<2.0", "pytest", "pytest-cov"]
+
+docs = [
+  "mkdocs-material",
+  "mkdocs-mknodes",
+  # Only add below (Copier)
+]
+
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-python-source = "python"
 module-name = "sublime_search._sublime_search"
-
-[dependency-groups]
-dev = ["pytest", "pytest-cov"]
-
-docs = [
-    "mkdocs-mknodes",
-    "mkdocs-material",
-    # Only add below (Copier)
-]
+python-source = "python"
