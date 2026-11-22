@@ -1,6 +1,18 @@
 # sublime-search
 
-A simple, fast, Rust implementation of sublime-text style fuzzy matching and sophisticated text replacement for Python.
+[![PyPI](https://img.shields.io/pypi/v/sublime-search.svg)](https://pypi.org/project/sublime-search/)
+[![Python versions](https://img.shields.io/pypi/pyversions/sublime-search.svg)](https://pypi.org/project/sublime-search/)
+[![CI](https://github.com/phil65/sublime-search/actions/workflows/build.yml/badge.svg)](https://github.com/phil65/sublime-search/actions/workflows/build.yml)
+
+Fast fuzzy matching and fuzzy text editing for Python, implemented in Rust (PyO3).
+
+- Sublime Text style fuzzy matching with scoring (`fuzzy_match`, `get_best_matches`)
+- Robust search-and-replace with eight fallback strategies, built for LLM code-editing
+  tools where the "old text" rarely matches exactly (`replace_content`)
+- Parsing and applying locationless unified diffs (`apply_diff_hunks`)
+- A streaming matcher that locates text in a file while it is still arriving
+  (`StreamingFuzzyMatcher`)
+- Typed (`py.typed` + stubs), prebuilt wheels for CPython 3.11+ (including free-threaded builds)
 
 ## Installation
 
@@ -77,13 +89,16 @@ The replacer tries these strategies in order until one succeeds:
 
 #### Error Handling
 
-```python
-from sublime_search import replace_content, try_replace_content
+Recoverable failures (text not found, ambiguous matches, empty `old_string`) raise
+`RetryableError`, so an agent framework can map them to its own "retry" signal.
+`ValueError` is reserved for programming errors (`old_string == new_string`).
 
-# replace_content raises ValueError on errors
+```python
+from sublime_search import RetryableError, replace_content, try_replace_content
+
 try:
     result = replace_content(content, "not found", "replacement")
-except ValueError as e:
+except RetryableError as e:
     print(e)  # Detailed error with fuzzy match suggestions
 
 # try_replace_content returns a typed result object instead of raising
@@ -93,9 +108,42 @@ if result:  # TryReplaceResult is falsy on failure
 else:
     print(result.error_type)    # "not_found", "multiple_matches", or "no_change"
     print(result.error)         # Detailed error message
+    print(result.retryable)     # True for not_found / multiple_matches
     print(result.closest_match) # FuzzyMatchInfo if a close match was found
     print(result.locations)     # Line numbers for multiple matches
 ```
+
+### Locationless Diffs
+
+Apply diffs without line numbers (the format LLMs tend to produce). Each hunk's
+context and removed lines are located with the same fallback strategies as
+`replace_content`. Input wrapped in `<diff>...</diff>` tags or a diff code fence
+is accepted, and `---`/`+++`/`@@` headers are skipped.
+
+```python
+from sublime_search import apply_diff_hunks, parse_locationless_diff
+
+content = "def add(a, b):\n    return a - b\n"
+diff = """\
+ def add(a, b):
+-    return a - b
++    return a + b
+"""
+
+hunks = parse_locationless_diff(diff)
+print(hunks[0].old_text, hunks[0].new_text)
+
+result = apply_diff_hunks(content, diff)
+print(result.content)  # "def add(a, b):\n    return a + b\n"
+print(result.applied_count, result.total_count, result.all_applied)
+for hunk in result.hunk_results:
+    print(hunk.success, hunk.strategy, hunk.start_line, hunk.end_line)
+```
+
+`apply_diff_hunks` raises `RetryableError` if no hunk could be applied and `ValueError`
+if the input contains no hunks. `apply_diff_hunks_with_hint(content, diff, line_hint=...)`
+disambiguates repeated context, and `try_apply_diff_hunks(...)` never raises (it returns
+`None` if no hunks were found, otherwise an `ApplyDiffResult` that may report failures).
 
 ### Streaming Fuzzy Matcher
 
@@ -153,22 +201,30 @@ matcher.source_lines  # Source text split into lines
 
 | Function | Description |
 |----------|-------------|
-| `fuzzy_match(pattern, string, ...)` | Check if pattern matches string, returns `(bool, score)` |
-| `fuzzy_match_simple(pattern, string, case_sensitive=False)` | Simple match check, returns `bool` |
-| `get_best_matches(pattern, candidates)` | Find all matches sorted by score |
-| `replace_content(content, old, new, replace_all=False, line_hint=None)` | Replace text with fallback strategies |
-| `try_replace_content(...)` | Non-raising version of `replace_content` |
+| `fuzzy_match(pattern, instring, ...)` | Check if pattern matches string, returns `(bool, score)`; bonuses/penalties are keyword-tunable |
+| `fuzzy_match_simple(pattern, instring, case_sensitive=False)` | Simple in-order character match, returns `bool` |
+| `get_best_matches(search_string, candidates)` | All matching candidates as `(candidate, score)`, sorted by score |
+| `replace_content(content, old_string, new_string, replace_all=False, line_hint=None)` | Replace text with fallback strategies |
+| `try_replace_content(...)` | Non-raising version of `replace_content`, returns `TryReplaceResult` |
 | `trim_diff(diff_text)` | Remove common indentation from unified diff output |
+| `parse_locationless_diff(diff_text)` | Parse a locationless diff into `DiffHunk`s |
+| `apply_diff_hunks(content, diff_text, replace_all=False)` | Apply all hunks, returns `ApplyDiffResult` |
+| `apply_diff_hunks_with_hint(content, diff_text, line_hint=None)` | Same, preferring matches near `line_hint` |
+| `try_apply_diff_hunks(content, diff_text, replace_all=False, line_hint=None)` | Non-raising version, returns `ApplyDiffResult` or `None` |
 
 ### Classes
 
 | Class | Description |
 |-------|-------------|
 | `StreamingFuzzyMatcher` | Incremental fuzzy matcher for streaming text |
-| `MatchRange` | Range result from streaming matcher (start, end) |
+| `MatchRange` | Byte range result from streaming matcher (start, end) |
 | `ReplaceResult` | Result from replace_content (content, matched_text, start_line, end_line, strategy) |
-| `TryReplaceResult` | Result from try_replace_content (success, result, error, error_type, closest_match, locations) |
+| `TryReplaceResult` | Result from try_replace_content (success, result, error, error_type, closest_match, locations, retryable) |
 | `FuzzyMatchInfo` | Fuzzy match details (similarity, start_line, end_line, text, diff) |
+| `DiffHunk` | Parsed hunk (old_text, new_text, raw) |
+| `HunkResult` | Per-hunk outcome (success, strategy, error, start_line, end_line) |
+| `ApplyDiffResult` | Overall outcome (content, applied_count, total_count, hunk_results, all_applied) |
+| `RetryableError` | Exception for recoverable matching failures |
 
 ## Performance
 
