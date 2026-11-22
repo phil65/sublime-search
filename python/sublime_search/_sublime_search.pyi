@@ -392,9 +392,9 @@ def replace_content(
         ReplaceResult with the new content and match information
 
     Raises:
-        RetryableError: If old_string not found or multiple matches exist.
-            These are recoverable - caller should retry with corrected input.
-        ValueError: If old_string is empty or equals new_string.
+        RetryableError: If old_string is empty, not found, or multiple matches
+            exist. These are recoverable - caller should retry with corrected input.
+        ValueError: If old_string equals new_string.
             These are programming errors that should not be retried.
     """
     ...

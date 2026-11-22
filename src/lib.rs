@@ -162,6 +162,7 @@ fn get_best_matches(search_string: &str, candidates: Vec<String>) -> PyResult<Ve
 }
 
 #[pyfunction]
+#[pyo3(signature = (pattern, instring, case_sensitive=false))]
 fn fuzzy_match_simple(pattern: &str, instring: &str, case_sensitive: bool) -> bool {
     // Handle empty pattern explicitly (matches everything)
     if pattern.is_empty() {
@@ -344,8 +345,11 @@ impl ReplaceResult {
             self.start_line,
             self.end_line,
             self.strategy,
-            if self.matched_text.len() > 50 {
-                format!("{}...", &self.matched_text[..50])
+            if self.matched_text.chars().count() > 50 {
+                format!(
+                    "{}...",
+                    self.matched_text.chars().take(50).collect::<String>()
+                )
             } else {
                 self.matched_text.clone()
             }
@@ -426,7 +430,8 @@ impl From<content_replacer::FuzzyMatchInfo> for FuzzyMatchInfo {
 ///     ReplaceResult with the new content and match information
 ///
 /// Raises:
-///     ValueError: If old_string equals new_string, not found, or multiple matches without line_hint
+///     RetryableError: If old_string is empty, not found, or has multiple matches
+///     ValueError: If old_string equals new_string
 #[pyfunction]
 #[pyo3(signature = (content, old_string, new_string, replace_all=false, line_hint=None))]
 fn replace_content(
@@ -610,9 +615,17 @@ impl PyDiffHunk {
         format!(
             "DiffHunk(old='{}{}', new='{}{}')",
             old_preview,
-            if self.old_text.len() > 30 { "..." } else { "" },
+            if self.old_text.chars().count() > 30 {
+                "..."
+            } else {
+                ""
+            },
             new_preview,
-            if self.new_text.len() > 30 { "..." } else { "" }
+            if self.new_text.chars().count() > 30 {
+                "..."
+            } else {
+                ""
+            }
         )
     }
 }
@@ -764,7 +777,8 @@ fn parse_locationless_diff(diff_text: &str) -> Vec<PyDiffHunk> {
 ///     ApplyDiffResult with the modified content and application details
 ///
 /// Raises:
-///     ValueError: If no diff hunks found or none could be applied
+///     RetryableError: If none of the hunks could be applied
+///     ValueError: If no diff hunks found in input
 #[pyfunction]
 #[pyo3(signature = (content, diff_text, replace_all=false))]
 fn apply_diff_hunks(
@@ -799,7 +813,8 @@ fn apply_diff_hunks(
 ///     ApplyDiffResult with the modified content and application details
 ///
 /// Raises:
-///     ValueError: If no diff hunks found or none could be applied
+///     RetryableError: If none of the hunks could be applied
+///     ValueError: If no diff hunks found in input
 #[pyfunction]
 #[pyo3(signature = (content, diff_text, line_hint=None))]
 fn apply_diff_hunks_with_hint(

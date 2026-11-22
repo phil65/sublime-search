@@ -289,3 +289,9 @@ class TestRetryableError:
             replace_content("content", "not found", "new")
         except Exception as e:
             assert isinstance(e, RetryableError)
+
+
+def test_replace_result_repr_with_multibyte_text() -> None:
+    """repr must not panic when truncating non-ASCII matched text."""
+    result = replace_content("€" * 60 + "\n", "€" * 60, "x")
+    assert repr(result).endswith("...')")
