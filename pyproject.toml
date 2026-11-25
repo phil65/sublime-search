@@ -51,7 +51,7 @@ dev = ["maturin>=1.8,<2.0", "pytest", "pytest-cov"]
 
 docs = [
   "mkdocs-material",
-  "mkdocs-mknodes",
+  "mknodes>=4.0.0; python_full_version >= '3.13'",
   # Only add below (Copier)
 ]
 
