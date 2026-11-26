@@ -18,6 +18,32 @@ mod diff_parser;
 mod streaming_matcher;
 use streaming_matcher::StreamingFuzzyMatcher;
 
+/// Run pure-Rust work without the GIL, turning a panic into `ValueError`.
+///
+/// Detached, a long search doesn't stall the other Python threads (or the event loop
+/// of an `asyncio.to_thread` caller). A panic would otherwise surface as
+/// `PanicException`, a `BaseException` that `except Exception` doesn't catch.
+fn detached<T, F>(py: Python<'_>, f: F) -> PyResult<T>
+where
+    F: FnOnce() -> T + Send,
+    T: Send,
+{
+    py.detach(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)))
+        .map_err(|payload| {
+            PyValueError::new_err(format!("internal error: {}", panic_text(&payload)))
+        })
+}
+
+fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "panic".to_string()
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (pattern, instring, adj_bonus=5, sep_bonus=10, camel_bonus=10, lead_penalty=-3, max_lead_penalty=-9, unmatched_penalty=-1))]
 fn fuzzy_match(
@@ -141,24 +167,30 @@ fn fuzzy_match(
 }
 
 #[pyfunction]
-fn get_best_matches(search_string: &str, candidates: Vec<String>) -> PyResult<Vec<(String, i32)>> {
+fn get_best_matches(
+    py: Python<'_>,
+    search_string: &str,
+    candidates: Vec<String>,
+) -> PyResult<Vec<(String, i32)>> {
     // Special case for empty search string
     if search_string.is_empty() {
         return Ok(Vec::new()); // Return empty results for empty search string
     }
 
-    let mut results = Vec::new();
+    detached(py, || {
+        let mut results = Vec::new();
 
-    for candidate in candidates {
-        let (matched, score) = fuzzy_match(search_string, &candidate, 5, 10, 10, -3, -9, -1);
-        if matched {
-            results.push((candidate, score));
+        for candidate in candidates {
+            let (matched, score) = fuzzy_match(search_string, &candidate, 5, 10, 10, -3, -9, -1);
+            if matched {
+                results.push((candidate, score));
+            }
         }
-    }
 
-    // Sort by score in descending order
-    results.sort_by(|a, b| b.1.cmp(&a.1));
-    Ok(results)
+        // Sort by score in descending order
+        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results
+    })
 }
 
 #[pyfunction]
@@ -435,14 +467,16 @@ impl From<content_replacer::FuzzyMatchInfo> for FuzzyMatchInfo {
 #[pyfunction]
 #[pyo3(signature = (content, old_string, new_string, replace_all=false, line_hint=None))]
 fn replace_content(
+    py: Python<'_>,
     content: &str,
     old_string: &str,
     new_string: &str,
     replace_all: bool,
     line_hint: Option<u32>,
 ) -> PyResult<ReplaceResult> {
-    match content_replacer::replace_content(content, old_string, new_string, replace_all, line_hint)
-    {
+    match detached(py, || {
+        content_replacer::replace_content(content, old_string, new_string, replace_all, line_hint)
+    })? {
         Ok(result) => Ok(result.into()),
         // NoChange is a programming error - use ValueError
         Err(content_replacer::ReplaceError::NoChange) => Err(PyValueError::new_err(
@@ -471,8 +505,8 @@ fn replace_content(
 /// Returns:
 ///     The diff with common indentation removed from content lines
 #[pyfunction]
-fn trim_diff(diff_text: &str) -> String {
-    content_replacer::trim_diff(diff_text)
+fn trim_diff(py: Python<'_>, diff_text: &str) -> PyResult<String> {
+    detached(py, || content_replacer::trim_diff(diff_text))
 }
 
 /// Result from try_replace_content - either success with result, or failure with error details.
@@ -533,20 +567,38 @@ impl TryReplaceResult {
 ///     - success: bool
 ///     - result: ReplaceResult if success, None otherwise
 ///     - error: Error message if failed, None otherwise
-///     - error_type: "not_found", "multiple_matches", or "no_change" if failed
+///     - error_type: "not_found", "multiple_matches", "no_change" or "internal_error"
 ///     - closest_match: FuzzyMatchInfo if a close match was found
 ///     - locations: List of line numbers if multiple matches found
 #[pyfunction]
 #[pyo3(signature = (content, old_string, new_string, replace_all=false, line_hint=None))]
 fn try_replace_content(
+    py: Python<'_>,
     content: &str,
     old_string: &str,
     new_string: &str,
     replace_all: bool,
     line_hint: Option<u32>,
 ) -> TryReplaceResult {
-    match content_replacer::replace_content(content, old_string, new_string, replace_all, line_hint)
-    {
+    let outcome = detached(py, || {
+        content_replacer::replace_content(content, old_string, new_string, replace_all, line_hint)
+    });
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        // Never raises: an internal error is reported like the other failures.
+        Err(err) => {
+            return TryReplaceResult {
+                success: false,
+                result: None,
+                error: Some(err.to_string()),
+                error_type: Some("internal_error".to_string()),
+                closest_match: None,
+                locations: None,
+                retryable: false,
+            }
+        }
+    };
+    match outcome {
         Ok(result) => TryReplaceResult {
             success: true,
             result: Some(ReplaceResult::from(result)),
@@ -756,11 +808,13 @@ impl From<diff_parser::ApplyDiffResult> for PyApplyDiffResult {
 /// Returns:
 ///     List of DiffHunk objects with old_text/new_text pairs
 #[pyfunction]
-fn parse_locationless_diff(diff_text: &str) -> Vec<PyDiffHunk> {
-    diff_parser::parse_locationless_diff(diff_text)
-        .into_iter()
-        .map(PyDiffHunk::from)
-        .collect()
+fn parse_locationless_diff(py: Python<'_>, diff_text: &str) -> PyResult<Vec<PyDiffHunk>> {
+    detached(py, || {
+        diff_parser::parse_locationless_diff(diff_text)
+            .into_iter()
+            .map(PyDiffHunk::from)
+            .collect()
+    })
 }
 
 /// Apply locationless diff edits to content.
@@ -782,11 +836,14 @@ fn parse_locationless_diff(diff_text: &str) -> Vec<PyDiffHunk> {
 #[pyfunction]
 #[pyo3(signature = (content, diff_text, replace_all=false))]
 fn apply_diff_hunks(
+    py: Python<'_>,
     content: &str,
     diff_text: &str,
     replace_all: bool,
 ) -> PyResult<PyApplyDiffResult> {
-    match diff_parser::apply_diff_hunks(content, diff_text, replace_all) {
+    match detached(py, || {
+        diff_parser::apply_diff_hunks(content, diff_text, replace_all)
+    })? {
         Ok(result) => Ok(PyApplyDiffResult::from(result)),
         // NoHunksFound is a format error - use ValueError
         Err(diff_parser::ApplyDiffError::NoHunksFound) => {
@@ -818,11 +875,14 @@ fn apply_diff_hunks(
 #[pyfunction]
 #[pyo3(signature = (content, diff_text, line_hint=None))]
 fn apply_diff_hunks_with_hint(
+    py: Python<'_>,
     content: &str,
     diff_text: &str,
     line_hint: Option<u32>,
 ) -> PyResult<PyApplyDiffResult> {
-    match diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint) {
+    match detached(py, || {
+        diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint)
+    })? {
         Ok(result) => Ok(PyApplyDiffResult::from(result)),
         // NoHunksFound is a format error - use ValueError
         Err(diff_parser::ApplyDiffError::NoHunksFound) => {
@@ -851,34 +911,40 @@ fn apply_diff_hunks_with_hint(
 #[pyfunction]
 #[pyo3(signature = (content, diff_text, replace_all=false, line_hint=None))]
 fn try_apply_diff_hunks(
+    py: Python<'_>,
     content: &str,
     diff_text: &str,
     replace_all: bool,
     line_hint: Option<u32>,
-) -> Option<PyApplyDiffResult> {
-    let result = if line_hint.is_some() {
-        diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint)
-    } else {
-        diff_parser::apply_diff_hunks(content, diff_text, replace_all)
-    };
+) -> PyResult<Option<PyApplyDiffResult>> {
+    detached(py, || {
+        let result = if line_hint.is_some() {
+            diff_parser::apply_diff_hunks_with_hint(content, diff_text, line_hint)
+        } else {
+            diff_parser::apply_diff_hunks(content, diff_text, replace_all)
+        };
 
-    match result {
-        Ok(r) => Some(PyApplyDiffResult::from(r)),
-        Err(diff_parser::ApplyDiffError::NoHunksFound) => None,
-        Err(diff_parser::ApplyDiffError::NoHunksApplied { .. }) => {
-            // Return a result with 0 applied for inspection
-            Some(PyApplyDiffResult {
-                content: content.to_string(),
-                applied_count: 0,
-                total_count: diff_parser::parse_locationless_diff(diff_text).len(),
-                hunk_results: Vec::new(),
-                all_applied: false,
-            })
+        match result {
+            Ok(r) => Some(PyApplyDiffResult::from(r)),
+            Err(diff_parser::ApplyDiffError::NoHunksFound) => None,
+            Err(diff_parser::ApplyDiffError::NoHunksApplied { .. }) => {
+                // Return a result with 0 applied for inspection
+                Some(PyApplyDiffResult {
+                    content: content.to_string(),
+                    applied_count: 0,
+                    total_count: diff_parser::parse_locationless_diff(diff_text).len(),
+                    hunk_results: Vec::new(),
+                    all_applied: false,
+                })
+            }
         }
-    }
+    })
 }
 
-#[pymodule]
+// The functions are pure over their arguments and there are no statics; a
+// StreamingFuzzyMatcher is guarded by PyO3's borrow checking (sharing one across threads
+// raises "Already borrowed" instead of corrupting it).
+#[pymodule(gil_used = false)]
 fn _sublime_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Exceptions
     m.add("RetryableError", m.py().get_type::<RetryableError>())?;

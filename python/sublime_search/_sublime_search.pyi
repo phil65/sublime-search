@@ -49,6 +49,9 @@ class StreamingFuzzyMatcher:
     This matcher is designed for real-time matching scenarios like code editing
     where text arrives in chunks (e.g., from an LLM streaming response).
 
+    A matcher is not meant to be shared across threads: concurrent calls raise
+    ``RuntimeError: Already borrowed``.
+
     Example:
         >>> matcher = StreamingFuzzyMatcher("function foo() {\\n    return 42;\\n}")
         >>> result = matcher.push("function foo() {\\n", None)
@@ -198,7 +201,7 @@ class TryReplaceResult:
 
     @property
     def error_type(self) -> str | None:
-        """Error type: 'not_found', 'multiple_matches', or 'no_change'."""
+        """Error type: 'not_found', 'multiple_matches', 'no_change' or 'internal_error'."""
         ...
 
     @property
@@ -388,13 +391,16 @@ def replace_content(
         replace_all: If True, replace all occurrences
         line_hint: Optional line number hint for disambiguation
 
+    Line endings: matching ignores CRLF vs LF; if every line ending of `content` is
+    CRLF, the result keeps CRLF. The work runs without holding the GIL.
+
     Returns:
         ReplaceResult with the new content and match information
 
     Raises:
         RetryableError: If old_string is empty, not found, or multiple matches
             exist. These are recoverable - caller should retry with corrected input.
-        ValueError: If old_string equals new_string.
+        ValueError: If old_string equals new_string, or on an internal error.
             These are programming errors that should not be retried.
     """
     ...
