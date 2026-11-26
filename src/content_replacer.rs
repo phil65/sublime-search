@@ -13,7 +13,7 @@
 //! 7. Trimmed-boundary - Match with trimmed boundaries
 //! 8. Context-aware - Use anchor lines for context matching
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Result of a successful replacement operation.
 #[derive(Debug, Clone)]
@@ -85,6 +85,29 @@ const MIN_SIMILARITY_RATIO: f64 = 0.5;
 /// Returns detailed information about the replacement or an error with
 /// helpful debugging information.
 pub fn replace_content(
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+    line_hint: Option<u32>,
+) -> Result<ReplaceResult, ReplaceError> {
+    // Matching runs on LF-normalized text; a file whose line endings are all CRLF gets
+    // them back, so a one-line edit doesn't rewrite every line ending.
+    let mut result = replace_content_lf(content, old_string, new_string, replace_all, line_hint)?;
+    if uses_crlf(content) {
+        result.content = result.content.replace('\n', "\r\n");
+        result.matched_text = result.matched_text.replace('\n', "\r\n");
+    }
+    Ok(result)
+}
+
+/// Whether every line ending of `content` is CRLF (and there is at least one).
+fn uses_crlf(content: &str) -> bool {
+    let crlf = content.matches("\r\n").count();
+    crlf > 0 && crlf == content.matches('\n').count()
+}
+
+fn replace_content_lf(
     content: &str,
     old_string: &str,
     new_string: &str,
@@ -390,7 +413,10 @@ fn calculate_block_similarity(
     {
         let original_line = original_lines[start_line + j].trim();
         let search_line = search_lines[j].trim();
-        let max_len = original_line.len().max(search_line.len());
+        let max_len = original_line
+            .chars()
+            .count()
+            .max(search_line.chars().count());
 
         if max_len == 0 {
             continue;
@@ -512,7 +538,7 @@ fn indentation_flexible_replacer(content: &str, find: &str) -> Vec<String> {
 
         let min_indent = non_empty_lines
             .iter()
-            .map(|line| line.len() - line.trim_start().len())
+            .map(|line| ascii_indent(line))
             .min()
             .unwrap_or(0);
 
@@ -726,15 +752,7 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
 
 /// Find the occurrence of search_text closest to line_hint.
 fn find_closest_match(content: &str, search_text: &str, line_hint: usize) -> Option<usize> {
-    let mut matches: Vec<(usize, usize)> = Vec::new(); // (line_number, char_index)
-
-    let mut start = 0;
-    while let Some(index) = content[start..].find(search_text) {
-        let abs_index = start + index;
-        let line_num = content[..abs_index].matches('\n').count() + 1;
-        matches.push((line_num, abs_index));
-        start = abs_index + 1;
-    }
+    let matches = find_match_positions(content, search_text);
 
     if matches.is_empty() {
         return None;
@@ -751,17 +769,36 @@ fn find_closest_match(content: &str, search_text: &str, line_hint: usize) -> Opt
 /// Unlike find_all_match_locations, this does proper exact matching instead of
 /// just checking if the first line is contained.
 fn find_all_match_locations_exact(content: &str, search_text: &str) -> Vec<usize> {
-    let mut locations = Vec::new();
-    let mut start = 0;
+    find_match_positions(content, search_text)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
 
-    while let Some(index) = content[start..].find(search_text) {
+/// All (overlapping) occurrences of `search_text` as (1-based line, byte index).
+///
+/// The search resumes one *character* after each hit: one byte later is not a char
+/// boundary when the match starts with a multi-byte character. Lines are counted
+/// incrementally instead of from the start for every hit.
+fn find_match_positions(content: &str, search_text: &str) -> Vec<(usize, usize)> {
+    let mut matches = Vec::new();
+    let step = search_text.chars().next().map_or(1, char::len_utf8);
+    let mut start = 0;
+    let mut line = 1;
+    let mut counted_to = 0;
+
+    while start <= content.len() {
+        let Some(index) = content[start..].find(search_text) else {
+            break;
+        };
         let abs_index = start + index;
-        let line_num = content[..abs_index].matches('\n').count() + 1;
-        locations.push(line_num);
-        start = abs_index + 1;
+        line += content[counted_to..abs_index].matches('\n').count();
+        counted_to = abs_index;
+        matches.push((line, abs_index));
+        start = abs_index + step;
     }
 
-    locations
+    matches
 }
 
 /// Find the best fuzzy match for search text in content.
@@ -792,7 +829,8 @@ fn find_best_fuzzy_match(
     let first_anchor = non_empty_search[0];
 
     // Find candidate starting positions
-    let mut candidate_starts: HashSet<usize> = HashSet::new();
+    // Sorted: ties resolve to the earliest window, the same on every call.
+    let mut candidate_starts: BTreeSet<usize> = BTreeSet::new();
     let spread = 5;
 
     for (i, line) in content_lines.iter().enumerate() {
@@ -814,8 +852,8 @@ fn find_best_fuzzy_match(
         }
     }
 
-    let mut best_match: Option<FuzzyMatchInfo> = None;
-    let mut best_similarity = 0.0_f64;
+    let search_chars: Vec<char> = search_text.chars().collect();
+    let mut best: Option<(f64, usize, String)> = None;
 
     for start in candidate_starts {
         let end = start + window_size;
@@ -824,23 +862,95 @@ fn find_best_fuzzy_match(
         }
 
         let window_text = content_lines[start..end].join("\n");
-        let similarity = calculate_similarity(search_text, &window_text);
+        let window_chars: Vec<char> = window_text.chars().collect();
+        let max_len = search_chars.len().max(window_chars.len());
+        // Only a window better than the best so far (and above the threshold) matters:
+        // the distance may stop being computed once it can't get there.
+        let floor = best
+            .as_ref()
+            .map_or(threshold, |(sim, _, _)| sim.max(threshold));
+        let max_distance = ((1.0 - floor) * max_len as f64).floor() as usize;
+        let Some(distance) = bounded_levenshtein(&search_chars, &window_chars, max_distance) else {
+            continue;
+        };
+        let similarity = similarity_from_distance(distance, max_len);
 
-        if similarity >= threshold && similarity > best_similarity {
-            best_similarity = similarity;
-            let diff = create_unified_diff(search_text, &window_text);
-
-            best_match = Some(FuzzyMatchInfo {
-                similarity,
-                start_line: start + 1, // 1-based
-                end_line: end,
-                text: window_text,
-                diff,
-            });
+        let is_better = best.as_ref().is_none_or(|(sim, _, _)| similarity > *sim);
+        if similarity >= threshold && is_better {
+            best = Some((similarity, start, window_text));
         }
     }
 
-    best_match
+    best.map(|(similarity, start, text)| FuzzyMatchInfo {
+        similarity,
+        start_line: start + 1, // 1-based
+        end_line: start + window_size,
+        diff: create_unified_diff(search_text, &text),
+        text,
+    })
+}
+
+/// Levenshtein distance of two char slices, or None if it exceeds `max_distance`.
+///
+/// Only the diagonal band of width `2 * max_distance + 1` is computed, and the
+/// computation stops as soon as a whole row exceeds `max_distance`.
+fn bounded_levenshtein(a: &[char], b: &[char], max_distance: usize) -> Option<usize> {
+    let (len_a, len_b) = (a.len(), b.len());
+    if len_a.abs_diff(len_b) > max_distance {
+        return None;
+    }
+    if len_a == 0 || len_b == 0 {
+        return Some(len_a.max(len_b));
+    }
+    const INF: usize = usize::MAX / 2;
+    let mut prev: Vec<usize> = (0..=len_b)
+        .map(|j| if j <= max_distance { j } else { INF })
+        .collect();
+    let mut curr: Vec<usize> = vec![INF; len_b + 1];
+
+    for i in 1..=len_a {
+        let lo = i.saturating_sub(max_distance).max(1);
+        let hi = (i + max_distance).min(len_b);
+        curr[0] = if i <= max_distance { i } else { INF };
+        if lo > 1 {
+            curr[lo - 1] = INF;
+        }
+        let mut row_min = curr[0];
+        for j in lo..=hi {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let value = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+            curr[j] = value;
+            row_min = row_min.min(value);
+        }
+        if hi < len_b {
+            curr[hi + 1] = INF;
+        }
+        if row_min > max_distance {
+            return None;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    let distance = prev[len_b];
+    (distance <= max_distance).then_some(distance)
+}
+
+fn similarity_from_distance(distance: usize, max_len: usize) -> f64 {
+    if max_len == 0 {
+        1.0
+    } else {
+        1.0 - (distance as f64 / max_len as f64)
+    }
+}
+
+/// Length in bytes of the leading ASCII spaces and tabs.
+///
+/// Indentation is counted in ASCII whitespace only: slicing other lines at a byte count
+/// taken over Unicode whitespace (`trim_start`) lands inside multi-byte characters.
+fn ascii_indent(line: &str) -> usize {
+    line.bytes()
+        .take_while(|b| *b == b' ' || *b == b'\t')
+        .count()
 }
 
 /// Trim common indentation from diff output.
@@ -871,8 +981,7 @@ pub fn trim_diff(diff_text: &str) -> String {
     for line in &content_lines {
         let content = &line[1..]; // Remove +/- prefix
         if !content.trim().is_empty() {
-            let indent = content.len() - content.trim_start().len();
-            min_indent = min_indent.min(indent);
+            min_indent = min_indent.min(ascii_indent(content));
         }
     }
 
@@ -905,6 +1014,7 @@ pub fn trim_diff(diff_text: &str) -> String {
 }
 
 /// Calculate similarity ratio between two strings (0.0 to 1.0).
+#[cfg(test)]
 fn calculate_similarity(s1: &str, s2: &str) -> f64 {
     if s1.is_empty() && s2.is_empty() {
         return 1.0;
@@ -913,10 +1023,11 @@ fn calculate_similarity(s1: &str, s2: &str) -> f64 {
         return 0.0;
     }
 
+    // Levenshtein counts chars: divide by char lengths, not byte lengths.
     let distance = levenshtein_distance(s1, s2);
-    let max_len = s1.len().max(s2.len());
+    let max_len = s1.chars().count().max(s2.chars().count());
 
-    1.0 - (distance as f64 / max_len as f64)
+    similarity_from_distance(distance, max_len)
 }
 
 /// Create a simple unified diff between two texts.
@@ -1710,5 +1821,64 @@ def other_function():
             matches.is_empty(),
             "Block anchor should reject low similarity matches"
         );
+    }
+
+    #[test]
+    fn test_bounded_levenshtein_matches_full_distance() {
+        let words = [
+            "",
+            "a",
+            "kitten",
+            "sitting",
+            "äöü straße",
+            "strasse",
+            "fn main() { println!(\"hi\"); }",
+            "fn main() { print!(\"ho\") }",
+            "漢字かな",
+        ];
+        for a in words {
+            for b in words {
+                let full = levenshtein_distance(a, b);
+                let ac: Vec<char> = a.chars().collect();
+                let bc: Vec<char> = b.chars().collect();
+                for k in 0..=12 {
+                    let expected = (full <= k).then_some(full);
+                    assert_eq!(
+                        bounded_levenshtein(&ac, &bc, k),
+                        expected,
+                        "{a:?} {b:?} {k}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_match_positions_with_multibyte_start() {
+        assert_eq!(find_match_positions("äx\näx\n", "äx"), vec![(1, 0), (2, 4)]);
+        assert_eq!(
+            find_match_positions("ääää", "ää"),
+            vec![(1, 0), (1, 2), (1, 4)]
+        );
+        assert_eq!(find_closest_match("→a\n→a\n→a\n", "→a", 3), Some(10));
+    }
+
+    #[test]
+    fn test_trim_diff_unicode_whitespace_indent() {
+        assert_eq!(trim_diff("+  a\n+\u{3000}b"), "+  a\n+\u{3000}b");
+        assert_eq!(trim_diff("+\t\ta\n+\t\u{a0}b"), "+\ta\n+\u{a0}b");
+    }
+
+    #[test]
+    fn test_crlf_is_kept() {
+        let result = replace_content("a\r\nb\r\nc\r\n", "b", "B", false, None).unwrap();
+        assert_eq!(result.content, "a\r\nB\r\nc\r\n");
+        let mixed = replace_content("a\r\nb\nc", "b", "B", false, None).unwrap();
+        assert_eq!(mixed.content, "a\nB\nc");
+    }
+
+    #[test]
+    fn test_similarity_uses_char_lengths() {
+        assert!((calculate_similarity("ää", "äb") - 0.5).abs() < 0.001);
     }
 }
