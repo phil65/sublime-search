@@ -29,6 +29,8 @@ const FUZZY_THRESHOLD: f64 = 0.8;
 pub struct StreamingFuzzyMatcher {
     /// Source text split into lines
     source_lines: Vec<String>,
+    /// The source lines joined with "\n" (what the match ranges index into)
+    joined_text: String,
     /// Cumulative byte offsets for each line start
     line_offsets: Vec<usize>,
     /// Total length of source text
@@ -70,6 +72,7 @@ impl StreamingFuzzyMatcher {
         };
 
         Self {
+            joined_text: source_lines.join("\n"),
             source_lines,
             line_offsets,
             total_len,
@@ -142,22 +145,12 @@ impl StreamingFuzzyMatcher {
 
     /// Get the text for a given range from the source.
     pub fn get_text(&self, range: &Range<usize>) -> String {
-        let source_text: String = self
-            .source_lines
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                if i < self.source_lines.len() - 1 {
-                    format!("{}\n", line)
-                } else {
-                    line.clone()
-                }
-            })
-            .collect();
-
-        let start = range.start.min(source_text.len());
-        let end = range.end.min(source_text.len());
-        source_text[start..end].to_string()
+        let start = range.start.min(self.joined_text.len());
+        let end = range.end.min(self.joined_text.len());
+        self.joined_text
+            .get(start..end)
+            .unwrap_or_default()
+            .to_string()
     }
 
     fn resolve_location_fuzzy(&mut self) -> Vec<Range<usize>> {
